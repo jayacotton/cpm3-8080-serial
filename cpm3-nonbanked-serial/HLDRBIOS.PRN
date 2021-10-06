@@ -1,0 +1,746 @@
+                ;********************************************************************************************
+                ; CP/M 3.0 LOADER BIOS FOR THE S100Computers (or ITHACA INTERSYSTEMS SYSTEM)Z80 BOARDS
+                ; AND THE S100Computers S100 IDE Board 
+                ;
+                ;	WRITTEN BY 		JOHN MONAHAN  10/22/2009
+                ;
+                ; The only relevence to the Z80 board has to do with the fact that
+                ; this CPU board has two ports that allow a window in the 64K RAM space to be re-mapped
+                ; to anywhere within a 24 bit address space. This allows convinient bank switching
+                ; for CPM3 in a CPM3 Banked system. In a non-banked CPM3 system any Z80 CPU card can be used.
+                ;
+                ;	12/24/09	V1.1		Correct High/Low byte sector read
+                ;	02/13/2011	V1.1		Removed dependenct on PROM for string writes
+                ;	02/23/2011	V1.2		Combined Banked & Non-Banked versions
+                ;	03/15/2011	V1.3		Single pulse to reset IDE Board
+                ;	03/16/2018	v1.4		Check CF card is ready after RESET before issuing CMD
+                ;
+                ;********************************************************************************************
+                
+                
+ FFFF =         TRUE		EQU	-1		; DEFINE LOGICAL VALUES:
+ 0000 =         FALSE		EQU	NOT TRUE
+                
+                					;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+ 0000 =         BANKED		EQU	FALSE		;<--- NOTE THIS ASSUMES WE WILL BE USING A NON-BANKED CPM3 
+                					;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+                					
+ 0007 =         BELL		EQU	07H
+ 000D =         CR		EQU	0DH
+ 000A =         LF		EQU	0AH
+                
+                ;   CPU BOARD PORT TO SWITCH IN MEMORY BANKS (ALSO BIT 0 OF D3 FOR PROM)
+                
+ 00D2 =         MPURR0		EQU	0D2H
+ 00D3 =         MPURR1		EQU	0D3H
+                
+                ;   SD Systems Video board Keyboard port
+                
+ 0010 =         CRTSTAT		EQU	010H		;For status and error reporting only
+ 0011 =         CRTOUT		EQU	011H
+                
+                ;--------------------------------------------------------------------------
+                ;Ports for 8255 chip. Change these to specify where the 8255 is addressed,
+                ;and which of the 8255's ports are connected to which IDE signals.
+                ;The first three control which 8255 ports have the control signals,
+                ;upper and lower data bytes.  The last one is for mode setting for the
+                ;8255 to configure its ports, which must correspond to the way that
+                ;the first three lines define which ports are connected.
+                ;--------------------------------------------------------------------------
+                
+ 0030 =         IDEportA	EQU	030H		;lower 8 bits of IDE interface
+ 0031 =         IDEportB	EQU	031H		;upper 8 bits of IDE interface
+ 0032 =         IDEportC	EQU	032H		;control lines for IDE interface
+ 0033 =         IDEportCtrl	EQU	033H		;8255 configuration port
+                
+ 0092 =         READcfg8255	EQU	10010010b	;Set 8255 IDEportC out, IDEportA/B input
+ 0080 =         WRITEcfg8255	EQU	10000000b	;Set all three 8255 ports output
+                
+                ;---------------------------------------------------------------
+                ;IDE control lines for use with IDEportC.  Change these 8
+                ;constants to reflect where each signal of the 8255 each of the
+                ;IDE control signals is connected.  All the control signals must
+                ;be on the same port, but these 8 lines let you connect them to
+                ;whichever pins on that port.
+                ;---------------------------------------------------------------
+                
+ 0001 =         IDEa0line	EQU	01H		;direct from 8255 to IDE interface
+ 0002 =         IDEa1line	EQU	02H		;direct from 8255 to IDE interface
+ 0004 =         IDEa2line	EQU	04H		;direct from 8255 to IDE interface
+ 0008 =         IDEcs0line	EQU	08H		;inverter between 8255 and IDE interface
+ 0010 =         IDEcs1line	EQU	10H		;inverter between 8255 and IDE interface
+ 0020 =         IDEwrline	EQU	20H		;inverter between 8255 and IDE interface
+ 0040 =         IDErdline	EQU	40H		;inverter between 8255 and IDE interface
+ 0080 =         IDErstline	EQU	80H		;inverter between 8255 and IDE interface
+                ;
+                ;Symbolic constants for the IDE Drive registers, which makes the
+                ;code more readable than always specifying the address pins
+                
+ 0008 =         REGdata		EQU	IDEcs0line
+ 0009 =         REGerr		EQU	IDEcs0line + IDEa0line
+ 000A =         REGseccnt	EQU	IDEcs0line + IDEa1line
+ 000B =         REGsector	EQU	IDEcs0line + IDEa1line + IDEa0line
+ 000C =         REGcylinderLSB	EQU	IDEcs0line + IDEa2line
+ 000D =         REGcylinderMSB	EQU	IDEcs0line + IDEa2line + IDEa0line
+ 000E =         REGshd		EQU	IDEcs0line + IDEa2line + IDEa1line		;(0EH)
+ 000F =         REGcommand	EQU	IDEcs0line + IDEa2line + IDEa1line + IDEa0line	;(0FH)
+ 000F =         REGstatus	EQU	IDEcs0line + IDEa2line + IDEa1line + IDEa0line
+ 0016 =         REGcontrol	EQU	IDEcs1line + IDEa2line + IDEa1line
+ 0017 =         REGastatus	EQU	IDEcs1line + IDEa2line + IDEa1line + IDEa0line
+                
+                ;IDE Command Constants.  These should never change.
+                
+ 0010 =         COMMANDrecal	EQU	10H
+ 0020 =         COMMANDread	EQU	20H
+ 0030 =         COMMANDwrite	EQU	30H
+ 0091 =         COMMANDinit	EQU	91H
+ 00EC =         COMMANDid	EQU	0ECH
+ 00E0 =         COMMANDspindown	EQU	0E0H
+ 00E1 =         COMMANDspinup	EQU	0E1H
+                
+                
+                ; IDE Status Register:
+                ;  bit 7: Busy	1=busy, 0=not busy
+                ;  bit 6: Ready 1=ready for command, 0=not ready yet
+                ;  bit 5: DF	1=fault occured insIDE drive
+                ;  bit 4: DSC	1=seek complete
+                ;  bit 3: DRQ	1=data request ready, 0=not ready to xfer yet
+                ;  bit 2: CORR	1=correctable error occured
+                ;  bit 1: IDX	vendor specific
+                ;  bit 0: ERR	1=error occured
+                
+                
+                ; INCLUDE CP/M 3.0 MACRO LIBRARY:
+                
+                	MACLIB CPM3
+                ;	MACLIB	Z80
+                
+                ;--------------------------------------------------------------------------
+                ;	                    CODE BEGINS HERE:
+                ;--------------------------------------------------------------------------	
+                
+ 0000 C3C500    		JMP	BOOT		;<----- INITIAL ENTRY ON COLD START
+ 0003 C3C400    		JMP	WBOOT		;REENTRY ON PROGRAM EXIT, WARM START
+ 0006 C36300    		JMP	CONST		;RETURN CONSOLE INPUT STATUS
+ 0009 C37200    		JMP	CONIN		;RETURN CONSOLE INPUT CHARACTER
+ 000C C37800    		JMP	CONOUT		;<------------ SEND CONSOLE OUTPUT CHARACTER
+ 000F C36900    		JMP	LIST		;SEND LIST OUTPUT CHARACTER
+ 0012 C36A00    		JMP	AUXOUT		;SEND AUXILLIARY OUTPUT CHARACTER
+ 0015 C37500    		JMP	AUXIN		;RETURN AUXILLIARY INPUT CHARACTER
+ 0018 C39F00    		JMP	HOME		;SET DISKS TO LOGICAL HOME
+ 001B C39B00    		JMP	SELDSK		;SELECT DISK DRIVE RETURN DISK PARAMETER INFO
+ 001E C3A200    		JMP	SETTRK		;SET DISK TRACK
+ 0021 C3AA00    		JMP	SETSEC		;SET DISK SECTOR
+ 0024 C3B200    		JMP	SETDMA		;SET DISK I/O MEMORY ADDRESS
+ 0027 C32001    		JMP	READ		;<----------- READ PHYSICAL BLOCK(S)
+ 002A C3C200    		JMP	WRITE		;WRITE PHYSICAL BLOCK(S)
+ 002D C36400    		JMP	LISTST		;RETURN LIST DEVICE STATUS
+ 0030 C3BA00    		JMP	SECTRN		;TRANSLATE LOGICAL TO PHYSICAL SECTOR
+ 0033 C38500    		JMP	CONOST		;RETURN CONSOLE OUTPUT STATUS
+ 0036 C36500    		JMP	AUXIST		;RETURN AUXILLIARY INPUT STATUS
+ 0039 C36600    		JMP	AUXOST		;RETURN AUXILLIARY OUTPUT STATUS
+ 003C C36B00    		JMP	DEVTBL		;RETURN ADDRESS OF DEVICE DEFINITION TABLE
+ 003F C36C00    		JMP	?CINIT		;CHANGE BAUD RATE OF DEVICE
+ 0042 C3BD00    		JMP	GETDRV		;RETURN ADDRESS OF DISK DRIVE TABLE
+ 0045 C36D00    		JMP	MULTIO		;SET MULTIPLE RECORD COUNT FOR DISK I/O
+ 0048 C36700    		JMP	FLUSH		;FLUSH BIOS MAINTAINED DISK CACHING
+ 004B C38D00    		JMP	?MOVE		;BLOCK MOVE MEMORY TO MEMORY
+ 004E C36E00    		JMP	?TIME		;SIGNAL TIME AND DATE OPERATION
+ 0051 C36F00    		JMP	BNKSEL		;SEL BANK FOR CODE EXECUTION AND DEFAULT DMA
+ 0054 C37000    		JMP	SETBNK		;SELECT DIFFERENT BANK FOR DISK I/O DMA OPS.
+ 0057 C37100    		JMP	?XMOVE		;SET SOURCE AND DEST. BANKS FOR ONE OPERATION
+ 005A C30000    		JMP	0		;RESERVED FOR FUTURE EXPANSION
+ 005D C30000    		JMP	0		;     DITTO
+ 0060 C30000    		JMP	0		;     DITTO
+                
+                
+ 0063 C9        CONST:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 0064 C9        LISTST:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 0065 C9        AUXIST:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 0066 C9        AUXOST:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 0067 AF        FLUSH:		XRA	A		; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+ 0068 C9        		RET			; RETURN A FALSE STATUS
+                
+ 0069 C9        LIST:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 006A C9        AUXOUT:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 006B C9        DEVTBL:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 006C C9        ?CINIT:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 006D C9        MULTIO:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 006E C9        ?TIME:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 006F C9        BNKSEL:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 0070 C9        SETBNK:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 0071 C9        ?XMOVE:		RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 0072 3E1A      CONIN:		MVI   A,'Z'-40H		; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+ 0074 C9        		RET
+                
+ 0075 3E1A      AUXIN:		MVI   A,'Z'-40H		; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+ 0077 C9        		RET
+                
+ 0078 CD8500    CONOUT:		CALL	CONOST		; ROUTINE OUTPUTS A CHARACTER IN [C] TO THE CONSOLE:
+ 007B CA7800    		JZ	CONOUT
+ 007E 79        		MOV	A,C
+ 007F FE00      		CPI	0		; SD BOARD VIDEO DOES NOT LIKE NULLS
+ 0081 C8        		RZ
+ 0082 D311      		OUT	CRTOUT
+ 0084 C9        		RET	
+                
+ 0085 DB10      CONOST:		IN	CRTSTAT		; RETURN CONSOLE OUTPUT STATUS:
+ 0087 E602      		ANI	02H
+ 0089 C8        		RZ			; 0 IF NOT READY
+ 008A AF        		XRA	A
+ 008B 3D        		DCR	A
+ 008C C9        		RET
+                
+ 008D EB        ?MOVE:		XCHG
+                ;		LDIR
+ 008E 7E        m10:		mov	a,m
+ 008F 12        		stax	d
+ 0090 23        		inx	h
+ 0091 13        		inx	d
+ 0092 0B        		dcx	b
+ 0093 79        		mov	a,c
+ 0094 FE00      		cpi	0
+ 0096 C28E00    		jnz	m10	
+ 0099 EB        		XCHG
+ 009A C9        		RET
+                
+ 009B 211303    SELDSK:		LXI	H,DPH0		; RETURN DPH ADDRESS FOR DRIVE A:
+ 009E C9        		RET
+                
+ 009F 010000    HOME:		LXI	B,0		; HOME SELECTED DRIVE -- TREAT AS SETTRK(0):
+                
+                SETTRK:		
+                ;		SBCD	@TRK		; ROUTINE SETS TRACK TO ACCESS ON NEXT READ
+ 00A2 E5        		push	h
+ 00A3 C5        		push	b
+ 00A4 E1        		pop	h
+ 00A5 22E202    		shld	@TRK
+ 00A8 E1        		pop	h
+ 00A9 C9        		RET
+                	
+                SETSEC:	
+                ;	SBCD	@SECT		; ROUTINE SETS SECTOR TO ACCESS ON NEXT READ
+ 00AA E5        		push	h
+ 00AB C5        		push	b
+ 00AC E1        		pop	h
+ 00AD 22E602    		shld	@SECT
+ 00B0 E1        		pop	h
+ 00B1 C9        		RET
+                
+                SETDMA:	
+                ;	SBCD	@DMA		; ROUTINE SETS DISK MEMORY ADDRESS FOR READ
+ 00B2 E5        		push	h
+ 00B3 C5        		push	b
+ 00B4 E1        		pop	h
+ 00B5 22E402    		shld	@DMA
+ 00B8 E1        		pop	h
+ 00B9 C9        		RET
+                
+ 00BA 69        SECTRN:		MOV	L,C		; NO TRANSLATION FOR HDISK
+ 00BB 60        		MOV	H,B
+ 00BC C9        		RET
+                
+ 00BD 21E902    GETDRV:		LXI	H,@DTBL		; RETURN ADDRESS OF DISK DRIVE TABLE:
+ 00C0 C9        		RET
+                
+ 00C1 C9        DCBINIT:	RET			; ROUTINE HAS NO FUNCTION IN LOADER BIOS:
+                
+ 00C2 AF        WRITE:		XRA	A		; RETURN GOOD RESULT CODE
+ 00C3 C9        		RET
+                
+                
+ 00C4 C9        WBOOT:		RET			; WARM BOOT IS NOT USED IN LOADER BIOS
+                
+                ;--------------------------------------------------------------------------
+                ;                                  BOOT
+                ;                   ROUTINE DOES COLD BOOT INITIALIZATION:
+                ;--------------------------------------------------------------------------
+                
+                
+                BOOT:
+                		IF	BANKED
+                	
+                ;=========================================================================================	
+                ; LETS RELOCATE OUR MEMORY IMAGE UP TO THE 10000H-17FFFH MEMORY
+                ; REGION FOR EXECUTION -- CP/M 3.0 BANK 0 WILL BE THAT EXTENDED
+                ; ADDRESS REGION AND THE TPA WILL BE PART OF THE NORMAL LOWER 64K
+                ;=========================================================================================
+                	
+                		MVI	A,11H		;<--- Map to (0001xxx1) + BIT 0 IS FOR EPROM DISABLE 
+                		OUT	MPURR1		;THIS RELOCATES THE UPPER WINDOW TO 10000H-13FFFH
+                		LXI	B,2000H		;WE WILL MOVE 8K BYTES, (should be more than enough)
+                		LXI	H,0		;STARTING FROM 0000H
+                		LXI	D,4000H		;UP TO 3FFFH TO 10000H
+                ;		LDIR			;Z-80 BLOCK MOVE
+                		MVI	A,11H		;Back to the 10000H RAM area
+                		OUT	MPURR0		;SWITCH OURSELVES IN TO THAT WINDOW
+                		ADI	4		;AND MAKE THE UPPER WINDOW CONTIGUOUS
+                		OUT	MPURR1		;THE Z80 ADDRESS LINES ARE NOW, (Unknown to the Z80), 
+                					;reading (0-7FFFH) to 10000H-17FFFH. Addresses 8000H-FFFFH are unchanged
+                					;At this point we are in the > 64K window (unknown to the Z80).
+                ;===========================================================================================
+                
+                		ENDIF
+                					
+ 00C5 CDD000    		CALL	HDLOGIN		;Bring IDE Drive up to speed
+ 00C8 C8        		RZ			;<<<< Ret Z if no problem
+                	
+                					;Turn off memory bank selection
+ 00C9 21A502    RESERR:		LXI	H,IDE$FAIL	;Initilization of IDE Drive failed
+ 00CC CD3C02    		CALL	SPECIAL$PMSG	;Note we cannot use the normal @PMSG BIOS call. It appears not to be valid yet 
+ 00CF 76        		HLT			;Cannot recover easily, banks may be screwed up, just HALT
+                
+                HDLOGIN:				;Initilize the 8255 and drive then do a hard reset on the drive, 
+                
+ 00D0 217D02    	lxi	h,msg1
+ 00D3 CD3C02    	call	SPECIAL$PMSG
+ 00D6 3E92      		MVI	A,READcfg8255	;Config 8255 chip (10010010B), read mode on return
+ 00D8 D333      		OUT	IDEportCtrl	;Config 8255 chip, READ mode
+                				
+                					;Hard reset the disk drive 
+                					;For some reason some CF cards need to the RESET line 
+                					;pulsed very carefully. You may need to play around   
+ 00DA 3E80      		MVI	A,IDErstline	;with the pulse length. Symptoms are: incorrect data comming
+ 00DC D332      		OUT	IDEportC	;back from a sector read (often due to the wrong sector being read)
+                					;I have a (negative)pulse of 2.7uSec. (10Mz Z80, two IO wait states).
+ 00DE 0620      		MVI	B,20H		;Which seem to work for the 5 different CF cards I have.
+                ResetDelay:
+ 00E0 05        		DCR	B
+ 00E1 C2E000    		JNZ	ResetDelay	;Delay (reset pulse width)
+                
+ 00E4 AF        		XRA	A
+ 00E5 D332      		OUT	IDEportC	;No IDE control lines asserted (just bit 7 of port C)
+                
+ 00E7 CD2F02    		CALL	DELAY$32
+                
+                						;****** D.Fry - 16/03/2018 *****
+ 00EA CDF501    		CALL	IDEwaitnotbusy		; Make sure CF drive is ready to
+ 00ED DA7401    		JC	SetErrorFlag		; accept CMD - If problem abort
+                						;*******************************
+                			
+ 00F0 16E0      		MVI	D,11100000b	;Data for IDE SDH reg (512bytes, LBA mode,single drive,head 0000)
+                					;For Trk,Sec,head (non LBA) use 10100000
+                					;Note. Cannot get LBA mode to work with an old Seagate Medalist 6531 drive.
+                					;have to use teh non-LBA mode. (Common for old hard disks).
+                
+ 00F2 1E0E      		MVI	E,REGshd	;00001110,(0EH) for CS0,A2,A1,  
+ 00F4 CD5902    		CALL	IDEwr8D		;Write byte to select the MASTER device;
+ 00F7 06FF      		MVI	B,0FFH		;<<< May need to adjust delay time
+                WaitInit:	
+ 00F9 1E0F      		MVI	E,REGstatus	;Get status after initilization
+ 00FB CD4802    		CALL	IDErd8D		;Check Status (info in [D])
+                ;		BIT	7,D
+ 00FE 7A        		mov	a,d
+ 00FF E680      		ani	80h
+                ;		RZ			;Return if ready bit is zero
+ 0101 C8        		rz
+ 0102 218E02    	lxi	h,msg2
+ 0105 CD3C02    	call	SPECIAL$PMSG
+                					;Delay to allow drive to get up to speed
+ 0108 C5        		PUSH	B		;(the 0FFH above)
+ 0109 01FFFF    		LXI	B,0FFFFH	
+ 010C 1602      DELAY2:		MVI	D,2		;May need to adjust delay time to allow cold drive to
+ 010E 15        DELAY1:		DCR	D		;to speed
+ 010F C20E01    		JNZ	DELAY1
+ 0112 0B        		DCX	B
+ 0113 79        		MOV	A,C
+ 0114 B0        		ORA	B
+ 0115 C20C01    		JNZ	DELAY2
+ 0118 C1        		POP	B
+                ;		DJNZ	WaitInit
+ 0119 05        		dcr	b
+ 011A C2F900    		jnz	WaitInit
+ 011D AF        		XRA	A		;Flag error on return
+ 011E 3D        		DCR	A
+ 011F C9        		RET
+                
+                ;--------------------------------------------------------------------------------
+                ;	   IDE HARD DISK READ A SECTOR AT @TRK, @SEC TO Address at @DMA
+                ;--------------------------------------------------------------------------------
+                
+                READ:		
+                	;	SSPD	OLDSTACK	;At bottom of this smodule
+ 0120 210000    		lxi	h,0
+ 0123 39        		dad	sp
+ 0124 225507    		shld	OLDSTACK
+ 0127 317F07    		LXI	SP,NEWSTACK
+ 012A AF        		XRA	A
+ 012B 32E802    		STA	ERFLG	     	;CLEAR THE ERROR FLAG
+                
+ 012E CD7E01    		CALL	wrlba		;Send to drive the sector we want to read. Converting
+                					;CPM TRK/SEC info to Drive LBA address
+                					;Send before error check so info is updated
+ 0131 CDF501    		CALL	IDEwaitnotbusy	;make sure drive is ready
+ 0134 DA7401    		JC	SetErrorFlag	;Returned with NZ set if error
+                
+ 0137 1620      		MVI	D,COMMANDread
+ 0139 1E0F      		MVI	E,REGcommand
+ 013B CD5902    		CALL	IDEwr8D		;Send sector write command to drive.
+ 013E CD1202    		CALL	IDEwaitdrq	;Wait until it's got the data
+ 0141 DA7401    		JC	SetErrorFlag	;If problem abort
+                		
+ 0144 2AE402    		LHLD  	@DMA		;DMA address
+ 0147 0600      		MVI	B,0		;256X2 = 512 bytes
+                MoreRD16:
+ 0149 3E08      		MVI	A,REGdata	;REG regsiter address
+ 014B D332      		OUT	IDEportC	
+                
+ 014D F640      		ORI	IDErdline	;08H+40H, Pulse RD line
+ 014F D332      		OUT	IDEportC	
+                
+ 0151 DB30      		IN	IDEportA	;read the LOWER byte
+ 0153 77        		MOV	M,A
+ 0154 23        		INX	H
+ 0155 DB31      		IN	IDEportB	;THEN read the UPPER byte
+ 0157 77        		MOV	M,A
+ 0158 23        		INX	H
+                	
+ 0159 3E08      		MVI	A,REGdata	;Deassert RD line
+ 015B D332      		OUT	IDEportC
+                
+                ;		DJNZ	MoreRD16
+ 015D 05        		dcr	b
+ 015E C24901    		jnz	MoreRD16
+                
+ 0161 1E0F      		MVI	E,REGstatus	;Check R/W status when done
+ 0163 CD4802    		CALL	IDErd8D
+ 0166 7A        		MOV	A,D
+ 0167 E601      		ANI	01H
+ 0169 32E802    		STA	ERFLG		;Ret Z if All OK
+ 016C C27401    		JNZ	SetErrorFlag
+                ;		LSPD	OLDSTACK	;<<< Critial this is here. Spent 2 hours 
+ 016F 2A5507    		lhld	OLDSTACK
+ 0172 F9        		sphl
+ 0173 C9        		RET			;    debugging, to find this out!
+                
+                SetErrorFlag:				;For now just return with error flag set
+ 0174 AF        		XRA	A
+ 0175 3D        		DCR	A
+ 0176 32E802    		STA	ERFLG		;Ret NZ if problem
+                	;	LSPD	OLDSTACK
+ 0179 2A5507    		lhld	OLDSTACK
+ 017C F9        		sphl
+ 017D C9        		RET
+                
+                ;=============================================================================
+                ;                              SUPPORT ROUTINES
+                ;=============================================================================
+                
+                wrlba:					
+ 017E 2AE202    		LHLD	@TRK		;Get CPM requested Track Hi&Lo
+ 0181 2600      		MVI	H,00H		;zero high track byte
+ 0183 7D        		MOV	A,L		;load low track byte to accumulator
+ 0184 FE00      		CPI	00H		;check for 0 track and skip track loop
+ 0186 CA9001    		JZ	lbasec
+ 0189 0606      		MVI	B,06H		;load counter to shift low track value 6 places to left i.e X 64
+                lbatrk:
+ 018B 29        		DAD	H		;Add HL to itself 6 times to multiply by 64
+                ;		DJNZ	lbatrk		;loop around 6 times i.e x 64
+ 018C 05        		dcr	b
+ 018D C28B01    		jnz	lbatrk
+                
+                lbasec:
+ 0190 3AE602    		LDA	@SECT		;Get CPM requested sector
+ 0193 85        		ADD	L		;Add value in L to sector info in A
+ 0194 D29801    		JNC	lbaoff		;If no carry jump to lba offset correction
+ 0197 24        		INR	H		;carry one over to H
+                lbaoff:
+ 0198 6F        		MOV	L,A		;copy accumulator to L
+                					;HL should now contain correct LBA value
+ 0199 1600      		MVI	D,0		;Send 0 for upper cyl value
+ 019B 1E0D      		MVI	E,REGcylinderMSB
+ 019D CD5902    		CALL	IDEwr8D		;Send info to drive
+                
+ 01A0 54        		MOV	D,H		;load lba high byte to D from H
+ 01A1 1E0C      		MVI	E,REGcylinderLSB
+ 01A3 CD5902    		CALL	IDEwr8D		;Send info to drive
+                
+ 01A6 55        		MOV	D,L		;load lba low byte to D from L
+ 01A7 1E0B      		MVI	E,REGsector
+ 01A9 CD5902    		CALL	IDEwr8D		;Send info to drive
+                
+ 01AC 1601      		MVI	D,1		;For now, one sector at a time
+ 01AE 1E0A      		MVI	E,REGseccnt
+ 01B0 CD5902    		CALL	IDEwr8D
+                
+ 01B3 C9        		RET
+                ;================================================================================
+                ;================================================================================
+                
+                
+ 01B4 F5        PHEX:	PUSH	PSW
+ 01B5 C5        	PUSH	B
+ 01B6 F5        	PUSH	PSW
+ 01B7 0F        	RRC
+ 01B8 0F        	RRC
+ 01B9 0F        	RRC
+ 01BA 0F        	RRC
+ 01BB CDC501    	CALL	ZCONV
+ 01BE F1        	POP	PSW
+ 01BF CDC501    	CALL	ZCONV
+ 01C2 C1        	POP	B
+ 01C3 F1        	POP	PSW
+ 01C4 C9        	RET
+                ;
+ 01C5 E60F      ZCONV:	ANI	0FH		;HEX to ASCII and print it
+ 01C7 C690      	ADI	90H
+ 01C9 27        	DAA
+ 01CA CE40      	ACI	40H
+ 01CC 27        	DAA
+ 01CD 4F        	MOV	C,A
+ 01CE CDD201    	CALL	ZCO
+ 01D1 C9        	RET
+                
+                
+                
+ 01D2 F5        ZCO:	PUSH	PSW		;Write character that is in [C]
+ 01D3 DB10      ZCO1:	IN   	CRTSTAT		;Show Character
+ 01D5 E602      	ANI	02H
+ 01D7 CAD301    	JZ	ZCO1
+ 01DA 79        	MOV	A,C
+ 01DB D311      	OUT	CRTOUT
+ 01DD F1        	POP	PSW
+ 01DE C9        	RET
+                
+                
+                
+                ; Print a string in [DE] up to '$'
+                PSTRING:
+ 01DF C5        	PUSH	B
+ 01E0 D5        	PUSH	D
+ 01E1 E5        	PUSH	H
+ 01E2 EB        	XCHG
+ 01E3 7E        PSTRX:	MOV	A,M
+ 01E4 FE24      	CPI	'$'
+ 01E6 CAF101    	JZ	DONEP
+ 01E9 4F        	MOV	C,A
+ 01EA CDD201    	CALL	ZCO
+ 01ED 23        	INX	H
+ 01EE C3E301    	JMP	PSTRX
+ 01F1 E1        DONEP:	POP	H
+ 01F2 D1        	POP	D
+ 01F3 C1        	POP	B
+ 01F4 C9        	RET
+                
+                
+                ;================================================================================
+                ;================================================================================
+                
+                IDEwaitnotbusy:				;Drive READY if 01000000
+ 01F5 06FF      		MVI	B,0FFH
+ 01F7 0EFF      		MVI	C,0FFH		;Delay, must be above 80H for 4MHz Z80. Leave longer for slower drives
+                MoreWait:
+ 01F9 1E0F      		MVI	E,REGstatus	;wait for RDY bit to be set
+ 01FB CD4802    		CALL	IDErd8D
+ 01FE 7A        		MOV	A,D
+ 01FF E6C0      		ANI	11000000B
+ 0201 EE40      		XRI	01000000B
+ 0203 CA1002    		JZ	DoneNotbusy	
+                ;		DJNZ	MoreWait
+ 0206 05        		dcr	b
+ 0207 C2F901    		jnz	MoreWait
+ 020A 0D        		DCR	C
+ 020B C2F901    		JNZ	MoreWait
+ 020E 37        		STC			;Set carry to indicqate an error
+ 020F C9        		RET
+                DoneNotBusy:
+ 0210 B7        		ORA	A		;Clear carry it indicate no error
+ 0211 C9        		RET
+                					;Wait for the drive to be ready to transfer data.
+                					;Returns the drive's status in Acc
+                IDEwaitdrq:
+ 0212 06FF      		MVI	B,0FFH
+ 0214 0EFF      		MVI	C,0FFH		;Delay, must be above 80H for 4MHz Z80. Leave longer for slower drives
+                MoreDRQ:
+ 0216 1E0F      		MVI	E,REGstatus	;wait for DRQ bit to be set
+ 0218 CD4802    		CALL	IDErd8D
+ 021B 7A        		MOV	A,D
+ 021C E688      		ANI	10001000B
+ 021E FE08      		CPI	00001000B
+ 0220 CA2D02    		JZ	DoneDRQ
+                ;		DJNZ	MoreDRQ
+ 0223 05        		dcr	b
+ 0224 C21602    		jnz	MoreDRQ
+ 0227 0D        		DCR	C
+ 0228 C21602    		JNZ	MoreDRQ
+ 022B 37        		STC			;Set carry to indicate error
+ 022C C9        		RET
+                DoneDRQ:
+ 022D B7        		ORA	A		;Clear carry
+ 022E C9        		RET
+                
+ 022F 3E28      DELAY$32:	MVI	A,40		;DELAY ~32 MS (DOES NOT SEEM TO BE CRITICAL)
+ 0231 0600      DELAY3:		MVI	B,0
+                M0:		
+                		;DJNZ	M0
+ 0233 05        		dcr	b
+ 0234 C23302    		jnz	M0
+ 0237 3D        		DCR	A
+ 0238 C23102    		JNZ	DELAY3 
+ 023B C9        		RET
+                
+                SPECIAL$PMSG:				;Cannot use @PMSG in LOADERBIOS
+ 023C 7E        		MOV	A,M
+ 023D 23        		INX	H
+ 023E FE24      		CPI	'$'
+ 0240 C8        		RZ	
+ 0241 4F        		MOV	C,A
+ 0242 CD7800    		CALL	CONOUT		;Hardware send to consol
+ 0245 C33C02    		JMP	SPECIAL$PMSG
+                
+                
+                ;-------------------------------------------------------------------------------
+                ; Low Level 8 bit R/W to the drive controller.  These are the routines that talk
+                ; directly to the drive controller registers, via the 8255 chip.  
+                ; Note the 16 bit I/O to the drive (which is only for SEC R/W) is done directly 
+                ; in the routines READ for speed reasons.
+                ;-------------------------------------------------------------------------------
+                
+                IDErd8D:				;READ 8 bits from IDE register in [E], return info in [D]
+ 0248 7B        		MOV	A,E
+ 0249 D332      		OUT	IDEportC	;drive address onto control lines
+                
+ 024B F640      		ORI	IDErdline	;RD pulse pin (40H)
+ 024D D332      		OUT	IDEportC	;assert read pin
+                
+ 024F DB30      		IN	IDEportA
+ 0251 57        		MOV	D,A		;return with data in [D]
+                
+ 0252 7B        		MOV	A,E		;<---Ken Robbins suggestion
+ 0253 D332      		OUT	IDEportC	;deassert RD pin first
+                
+ 0255 AF        		XRA	A
+ 0256 D332      		OUT	IDEportC	;Zero all port C lines
+ 0258 C9        		ret
+                
+                
+                IDEwr8D:				;WRITE Data in [D] to IDE register in [E]
+ 0259 3E80      		MVI	A,WRITEcfg8255	;Set 8255 to write mode
+ 025B D333      		OUT	IDEportCtrl
+                
+ 025D 7A        		MOV	A,D		;Get data put it in 8255 A port
+ 025E D330      		OUT	IDEportA
+                
+ 0260 7B        		MOV	A,E		;select IDE register
+ 0261 D332      		OUT	IDEportC
+                
+ 0263 F620      		ORI	IDEwrline	;lower WR line
+ 0265 D332      		OUT	IDEportC
+                
+ 0267 7B        		MOV	A,E		;<---Ken Robbins suggestion
+ 0268 D332      		OUT	IDEportC	;deassert WR pin first
+                
+ 026A AF        		XRA	A		;Deselect all lines including WR line
+ 026B D332      		OUT	IDEportC
+                
+ 026D 3E92      		MVI	A,READcfg8255	;Config 8255 chip, read mode on return
+ 026F D333      		OUT	IDEportCtrl
+ 0271 C9        		RET
+                
+ 0272 7E        PMSG:		MOV	A,M		;Print string in [HL] up to'$'
+ 0273 FE24      		CPI	'$'
+ 0275 C8        		RZ
+ 0276 4F        		MOV	C,A
+ 0277 CD7800    		CALL	CONOUT
+ 027A F27202    		JP	PMSG
+                	
+                
+                ;-----------------------------------------------------------------------
+                
+ 027D 0D0A417420msg1:	db	CR,LF,'At cold boot',CR,LF,'$'
+ 028E 0D0A446F69msg2:	db	CR,LF,'Doing longer delay',CR,LF,'$'
+ 02A5 070D0A496EIDE$FAIL:	DB	BELL,CR,LF,'Initilization of IDE Drive Failed. Will HALT the Z80 CPU!$'
+                
+ 02E2           @TRK:		DS	2		;2 BYTES FOR NEXT TRACK TO READ OR WRITE
+ 02E4           @DMA:		DS	2		;2 BYTES FOR NEXT DMA ADDRESS
+ 02E6           @SECT		DS	2		;2 BYTES FOR SECTOR
+ 02E8 00        ERFLG		DB	0H		;Error Flag.
+                
+                ;--------------------------------------------------------
+                ; BUILD CPM3 DPH'S ETC USING MACROS FOR HDISK AND BY HAND
+                ;--------------------------------------------------------
+                	
+                	; DISK DRIVE TABLE:
+ 02E9 1303000000@DTBL:	DW	DPH0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+                
+                	; DRIVE A DISK PARAMETER HEADER:
+ 0309 C200      	DW	WRITE			;DCB-II WRITE ROUTINE
+ 030B 2001      	DW	READ			;DCB-II READ ROUTINE
+ 030D 9B00      	DW	SELDSK			;DCB-II LOGIN PROCEDURE
+ 030F C100      	DW	DCBINIT			;DCB-II DRIVE INITIALIZATION ROUTINE
+ 0311 00        	DB	0			;RELATIVE DRIVE 0 ON THIS CONTROLLER
+ 0312 00        	DB	0			;MEDIA TYPE ALWAYS KNOWN FOR HARD DISK
+ 0313 0000      DPH0:	DW	0			;TRANSLATION VECTOR
+ 0315 0000000000	DB	0,0,0,0,0,0,0,0,0
+ 031E 00        	DB	0			;MEDIA FLAG
+ 031F 2C03      	DW	HD$DPB			;ADDRESS OF DISK PARAMETER BLOCK
+ 0321 690B      	DW	CSV			;CHECKSUM VECTOR
+ 0323 8107      	DW	ALV			;ALLOCATION VECTOR
+ 0325 3D03      	DW	DIRBCB			;DIRECTORY BUFFER CONTROL BLOCK
+ 0327 4903      	DW	DATABCB			;DATA BUFFER CONTROL BLOCK
+ 0329 FFFF      	DW	0FFFFH			;NO HASHING
+ 032B 00        	DB	0			;HASH BANK
+                
+                	; IDE HARD DISK PARAMETER BLOCK:
+                HD$DPB:	 DPB	512,64,256,2048,1024,1,8000H
+ 032C+0001      	DW	??0001		; 128 BYTE RECORDS PER TRACK
+ 032E+040F      	DB	??0002,??0003	; BLOCK SHIFT AND MASK
+ 0330+00        	DB	??0004		; EXTENT MASK
+ 0331+EF0F      	DW	??0005		; MAXIMUM BLOCK NUMBER
+ 0333+FF03      	DW	??0006		; MAXIMUM DIRECTORY ENTRY NUMBER
+ 0335+FFFF      	DB	??0007,??0008	; ALLOC VECTOR FOR DIRECTORY
+ 0337+0080      	DW	??0009		; CHECKSUM SIZE
+ 0339+0100      	DW	1		; OFFSET FOR SYSTEM TRACKS
+ 033B+0203      	DB	??0010,??0011	; PHYSICAL SECTOR SIZE SHIFT
+                
+                
+                	; DIRECTORY BUFFER CONTROL BLOCK:
+                DIRBCB:
+ 033D FF        	DB	0FFH			;DRIVE 0
+ 033E           	DS	3
+ 0341           	DS	1
+ 0342           	DS	1
+ 0343           	DS	2
+ 0345           	DS	2
+ 0347 5503      	DW	DIRBUF			;POINTER TO DIRECTORY BUFFER
+                
+                	; DATA BUFFER CONTROL BLOCK:
+                DATABCB:
+ 0349 FF        	DB	0FFH			;DRIVE 0
+ 034A           	DS	3
+ 034D           	DS	1
+ 034E           	DS	1
+ 034F           	DS	2
+ 0351           	DS	2
+ 0353 5505      	DW	DATABUF			;POINTER TO DATA BUFFER
+                
+                
+                	; DIRECTORY BUFFER
+ 0355           DIRBUF:	DS	512			;1 PHYSICAL SECTOR
+                
+                	; DATA BUFFER:
+ 0555           DATABUF:DS	512			;1 PHYSICAL SECTOR
+                
+ 0755 0000      OLDSTACK:DW	0
+ 0757           	 DS	40
+ 077F 0000      NEWSTACK:DW	0
+                	
+                	; DRIVE ALLOCATION VECTOR:
+ 0781           ALV:	 DS	1000			;SPACE FOR DOUBLE BIT ALLOCATION VECTORS
+                CSV:					;NO CHECKSUM VECTOR REQUIRED FOR A HDISK
+ 0B69 3C2D2D2045	DB	'<-- END OF LDRBIOS  '	;For debugging
+                ;
+ 0B7D           	END

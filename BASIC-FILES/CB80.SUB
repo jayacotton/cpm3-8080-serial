@@ -1,0 +1,8 @@
+; compile a Basic program with CB80
+CB80 $1
+LINK $1,CB80.IRL[S]
+; clean up by erasing $1.REL and $1.SYM
+ERA $1.REL
+ERA $1.SYM
+$1
+

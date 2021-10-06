@@ -1,0 +1,19 @@
+;generate CP/M 3 non-banked version and clean up
+pip defs.lib=defsnb.lib
+pip gencpm.dat=gencpmnb.dat
+m80 =scb/m
+m80 =bios3/m
+link bios3[os]=bios3,scb
+gencpm auto display
+m80 =ldrbios3/m
+m80 =cpmldr/m
+l80 cpmldr,ldrbios3,ldr/n/e
+era ldrbios3.rel
+era cpmldr.rel
+era scb.rel
+era bios3.rel
+era bios3.sym
+era defs.lib
+era gencpm.dat
+bootgen ldr.com a:
+

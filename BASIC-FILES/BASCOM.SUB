@@ -1,0 +1,7 @@
+; compile a Basic program with BASCOM
+BASCOM =$1
+L80 $1,BASLIB/S,$1/N/E
+; clean up by erasing $1.REL
+ERA $1.REL
+$1
+

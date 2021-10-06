@@ -1,0 +1,6 @@
+; read and compile an SPL program
+A:R $1.SPL
+A:SPL $1
+A:L80 $1,$1/N/E
+ERA $1.REL
+

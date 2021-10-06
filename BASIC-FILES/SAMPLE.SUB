@@ -1,0 +1,18 @@
+era sample.int
+era sample.rel
+era sample.com
+dir sample.*
+type sample.bas
+cbasic sample
+dir sample.*
+crun sample
+era sample.int
+cb80 sample
+link sample,cb80.irl[s]
+dir sample.*
+era sample.rel
+era sample.sym
+sample
+cbase2 sample
+dir sample.*
+crun2 sample

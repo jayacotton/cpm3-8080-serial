@@ -1,0 +1,10 @@
+diskdef s100ide
+  seclen 512
+  tracks 256
+  sectrk 64
+  blocksize 2048
+  maxdir 1024
+  skew 0
+  boottrk 1
+  os 3
+end

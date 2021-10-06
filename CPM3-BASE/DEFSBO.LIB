@@ -1,0 +1,4 @@
+banked	equ	true	; banked vs. non-banked
+nhdisks	equ	4	; number of hard drives
+expcom	equ	0c000h	; expected common base for banked memory
+
