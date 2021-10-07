@@ -1,0 +1,1680 @@
+     1 			;-------------------------------------------------------------------------
+     2 			;  ALTMON.ASM - 1K ROM monitor for the Altair 8800.
+     3 			; 
+     4 			;     This monitor is based on the 2.0C monitor from Vector Graphic. The
+     5 			;     original version has been updated to use Altair 2SIO serial ports
+     6 			;     for I/O and several commands have been added and/or modified. 
+     7 			;
+     8 			;     A typical location for this PROM in an Altair is at F800, though
+     9 			;     it can be assembled at most any address. The stack is typically
+    10 			;     placed at the top of the minimum RAM you expect to have in your
+    11 			;     system. Set the equate SPTR for the desired stack location.
+    12 			;
+    13 			;  Version     Date	Author
+    14 			;  -------  ----------	---------------------------------------
+    15 			;    1.0    01/10/2016  Mike Douglas  (Original)
+    16 			;
+    17 			;    1.1    02/29/2016  Mike Douglas
+    18 			;		Fix bug in DUMP code that caused improper range of bytes
+    19 			;		to display. Also in DUMP, display '.' for all characters
+    20 			;		7Fh or above.
+    21 			;
+    22 			;		Initialize 2nd 2SIO port so that loading of Intel HEX
+    23 			;		files works over the 2nd port. Only flush hex file
+    24 			;		input on the console serial port to free up code space
+    25 			;		and because it's not really required for the 2nd port.
+    26 			;
+    27 			;    1.2    05/05/2016  Mike Douglas
+    28 			;		By setting the Turnkey disable equate (TKYDSBL) to 1,
+    29 			;		ALTMON will read the sense switch (port 0FFh) during
+    30 			;		initialization to disable PROM on a Turnkey board. This
+    31 			;		is useful if the PROM board on which ALTMON is running
+    32 			; 		includes the desired PROMs for FC00-FFFF. In this case,
+    33 			;		the Turnkey board (if present) is used only for the auto-
+    34 			;		start jump to ALTMON.
+    35 			;
+    36 			;		"R" command boots Tarbell disk by jumping to a Tarbell
+    37 			;		boot PROM at FC00. Previously "R" was a duplicate of
+    38 			;		the "N" (non-destructive memory test) command.
+    39 			;
+    40 			;-------------------------------------------------------------------------
+    41 			;
+    42 			;   Following is a summary of changes from the original VG 2.0c monitor:
+    43 			;
+    44 			;	All commands immediately echo a full command name as soon as the 
+    45 			;	first command letter is typed (e.g., typing "M" immediately
+    46 			;	displays "MOVE"). This makes it easier to identify commands 
+    47 			;	without a list of commands present.
+    48 			;
+    49 			;	The ESC key can be pressed to abort input or commands as in
+    50 			;	the later 4.x monitors from VG. The original ctrl-c abort is
+    51 			;	still present as well.
+    52 			;
+    53 			;	The B (boot) command jumps to the Altair disk boot loader PROM
+    54 			;	at FF00 instead of the North Star boot ROM.
+    55 			;
+    56 			;	A (ASCII dump) command removed and D (hex dump) updated to display
+    57 			;	both hex and ASCII.
+    58 			;
+    59 			;	X (exchange) command changed to the E command.
+    60 			;
+    61 			;	H command added to load Intel hex file via either serial port
+    62 			;	on a 2SIO. The L (load and go from tape) does a hex file load
+    63 			;	as well (all tape commands eliminated).
+    64 			;
+    65 			;	J treated as jump (i.e., go to) command instead of jump to North
+    66 			;	Star DOS.
+    67 			;
+    68 			;	K treated as fill memory with "K"onstant instead of jump to zero
+    69 			;	(was the Z command which has been removed).
+    70 			;
+    71 			;	R jumps to the Tarbell boot PROM at FC00 to boot a Tarbell disk
+    72 			;
+    73 			;	The Y command (Vector Graphic relocating loader) command has been
+    74 			;	removed.
+    75 			;
+    76 			;	The T test memory command skips the 256 byte page the stack is on
+    77 			;	to prevent crashing the program. A "." pacifier is displayed 
+    78 			;	after each cycle through the memory test range is completed
+    79 			;
+    80 			;-------------------------------------------------------------------------
+    81 			;
+    82 			;  Command Summary:
+    83 			;
+    84 			;	B jump to Altair disk boot loader (FF00)
+    85 			;	C SSSS FFFF CCCC compare blocks
+    86 			;	D SSSS FFFF dump in hex and ASCII
+    87 			;	E SSSS FFFF DDDD exchange block
+    88 			;	F SSSS FFFF DD DD find two byte sequence
+    89 			;	G SSSS go to and execute
+    90 			;	H P load Intel hex file from 2SIO port 0 or 1
+    91 			;	I PP input from I/O port
+    92 			;	J SSSS go to and execute (G)
+    93 			;	K SSSS FFFF DD fill with "K"onstant
+    94 			;	L P load Intel hex file from 2SIO port 0 or 1
+    95 			;	M SSSS FFFF DDDD move block
+    96 			;	N non destructive memory test (size RAM)
+    97 			;	O PP DD output to port
+    98 			;	P LLLL program memory
+    99 			;	Q SSSS FFFF compute checksum
+   100 			;	R jump to Tarbell disk boot loader (FC00)
+   101 			;	S SSSS FFFF DD search for single byte sequence
+   102 			;	T SSSS FFFF test memory
+   103 			;
+   104 			;-------------------------------------------------------------------------
+   105 			;
+   106 			; Memory location equates
+   107
+   108 			;	org	0e000h		;ROM location	test location
+   109      F0 00		org	0f000h		;ROM location	final location
+   110
+   111      E0 01	SPTR	equ	$-0fffh		;stack pointer (use 256 byte boundary)
+   112      DF 02	BOOTBAS equ	SPTR-0ffh
+   113      DF E1	SIOPORT	equ	SPTR-32		;saved 2SIO port during hex load
+   114      FF 00	ALTBOOT	equ	0FF00h		;Altair disk boot loader ROM
+   115      FC 00	TARBOOT	equ	0FC00h		;Tarbell disk boot loader ROM
+   116
+   117 			; Turnkey Board - set TKYDSBL to 1 to disable Turnkey PROMs. This is
+   118 			;    done by reading the sense switch input port during initialization.
+   119
+   120      00 00	TKYDSBL	equ	0		;non-zero = disable turnkey PROMs
+   121      00 FF	SENSESW	equ	0FFh		;sense switch input port
+   122
+   123 			; 88-2SIO equates
+   124
+   125      00 10	CONS	equ	10h		;console status port
+   126      00 11	COND	equ	11h		;console data port
+   127      00 02	TBE	equ	2		;transmit buffer entry
+   128      00 01	RDA	equ	1		;receive data available
+   129
+   130      00 30	IDEportA        EQU     030H    ;Lower 8 bits of IDE interface (8255)
+   131      00 31	IDEportB        EQU     031H    ;Upper 8 bits of IDE interface
+   132      00 32	IDEportC        EQU     032H    ;Control lines for IDE interface
+   133      00 33	IDEportCtrl     EQU     033H    ;8255 configuration port
+   134      00 34	IDEDrive        EQU     034H    ;Bit 0 = 0 Drive A, =1 Drive B
+   135
+   136      00 92	READcfg8255     EQU     10010010b ;Set 8255 IDEportC to output, IDEportA/B input
+   137      00 80	WRITEcfg8255    EQU     10000000b ;Set all three 8255 ports to output mode
+   138
+   139 			;IDE control lines for use with IDEportC.
+   140
+   141      00 01	IDEa0line       EQU     01H     ;direct from 8255 to IDE interface
+   142      00 02	IDEa1line       EQU     02H     ;direct from 8255 to IDE interface
+   143      00 04	IDEa2line       EQU     04H     ;direct from 8255 to IDE interface
+   144      00 08	IDEcs0line      EQU     08H     ;inverter between 8255 and IDE interface
+   145      00 10	IDEcs1line      EQU     10H     ;inverter between 8255 and IDE interface
+   146      00 20	IDEwrline       EQU     20H     ;inverter between 8255 and IDE interface
+   147      00 40	IDErdline       EQU     40H     ;inverter between 8255 and IDE interface
+   148      00 80	IDErstline      EQU     80H     ;inverter between 8255 and IDE interface
+   149
+   150 			;Symbolic constants for the IDE Drive registers, which makes the
+   151 			;code more readable than always specifying the address bits
+   152
+   153      00 08	REGdata         EQU     IDEcs0line
+   154      00 09	REGerr          EQU     IDEcs0line + IDEa0line
+   155      00 0A	REGseccnt       EQU     IDEcs0line + IDEa1line
+   156      00 0B	REGsector       EQU     IDEcs0line + IDEa1line + IDEa0line
+   157      00 0C	REGcylinderLSB  EQU     IDEcs0line + IDEa2line
+   158      00 0D	REGcylinderMSB  EQU     IDEcs0line + IDEa2line + IDEa0line
+   159      00 0E	REGshd          EQU     IDEcs0line + IDEa2line + IDEa1line              ;(0EH)
+   160      00 0F	REGcommand      EQU     IDEcs0line + IDEa2line + IDEa1line + IDEa0line  ;(0FH)
+   161      00 0F	REGstatus       EQU     IDEcs0line + IDEa2line + IDEa1line + IDEa0line
+   162      00 16	REGcontrol      EQU     IDEcs1line + IDEa2line + IDEa1line
+   163      00 17	REGastatus      EQU     IDEcs1line + IDEa2line + IDEa1line + IDEa0line
+   164
+   165 			;IDE Command Constants.  These should never change.
+   166
+   167      00 10	COMMANDrecal    EQU     10H
+   168      00 20	COMMANDread     EQU     20H
+   169      00 30	COMMANDwrite    EQU     30H
+   170      00 91	COMMANDinit     EQU     91H
+   171      00 EC	COMMANDid       EQU     0ECH
+   172      00 E0	COMMANDspindown EQU     0E0H
+   173      00 E1	COMMANDspinup   EQU     0E1H
+   174
+   175
+   176 			; IDE Status Register:
+   177 			;  bit 7: Busy  1=busy, 0=not busy
+   178 			;  bit 6: Ready 1=ready for command, 0=not ready yet
+   179 			;  bit 5: DF    1=fault occured insIDE drive
+   180 			;  bit 4: DSC   1=seek complete
+   181 			;  bit 3: DRQ   1=data request ready, 0=not ready to xfer yet
+   182 			;  bit 2: CORR  1=correctable error occured
+   183 			;  bit 1: IDX   vendor specific
+   184 			;  bit 0: ERR   1=error occured
+   185
+   186
+   187 			; Misc Equates
+   188
+   189      00 0D	CR	equ	13		;ASCII carriage return
+   190      00 0A	LF	equ	10		;ASCII line feed
+   191      00 03	CTRLC	equ	3		;ASCII control-c
+   192      00 1B	ESC	equ	27		;ASCII ESCAPE
+   193
+   194 F000 C3 0A F4		jmp	IMSBoot		; jump to the cpm boot loader
+   195 			;---------------------------------------------------------
+   196 			;  monit - monitor entry point
+   197 			;---------------------------------------------------------
+   198 F003 3E 03	monit	mvi	a,3		;reset 6850 uart
+   199 F005 D3 10		out	CONS
+   200 F007 D3 12		out	CONS+2		;2nd 2SIO port as well
+   201 			; going for 9600 8n1
+   202 F009 3E 11		mvi	a,11h		;8N1 divide 1
+   203 F00B D3 10		out	CONS
+   204 F00D D3 12		out	CONS+2		;2nd 2SIO port as well
+   205
+   206     		 if TKYDSBL	
+   207     			in	SENSESW		;disable Turnkey PROM
+   208     		 endif
+   209
+   210 F00F 31 01 E0		lxi	sp,SPTR
+   211 F012 CD BA F3		call	dspMsg		;display welcome banner
+   212 F015			db	CR,LF,LF,'ALTMON 1.','2'+80h
+            0D 0A 0A 41 
+            4C 54 4D 4F 
+            4E 20 31 2E 
+            32 80 
+   213
+   214 			; start - command processing loop
+   215
+   216 F023 31 01 E0	start	lxi	sp,SPTR		;re-init stack pointer
+   217 F026 21 23 F0		lxi	h,start		;RET's go back to start
+   218 F029 E5			push	h
+   219
+   220 F02A CD 78 F3		call	crlf		;display '*' prompt after CR/LF
+   221 F02D 3E 2A		mvi	a,'*'
+   222 F02F CD 5D F3		call	ptcn
+   223
+   224 F032 CD D1 F3		call	getCon		;read command from keyboard
+   225 F035 E6 5F		ani	05FH		;lower case to upper case
+   226 F037 FE 42		cpi	'B'
+   227 F039 D8			rc			;too small
+   228 F03A FE 55		cpi	'U'
+   229 F03C D0			rnc			;too large
+   230
+   231 				;lxi	h,cmdTbl+100h-2*'B'	;'B' indexes to start of cmdtbl
+   232 F03D 21 C4 F0		lxi	h,cmdTbl+100h-(2*'B')	;'B' indexes to start of cmdtbl
+   233 F040 87			add	a		;2 bytes per entry
+   234 F041 85			add	l
+   235 F042 6F			mov	l,a
+   236
+   237 F043 5E			mov	e,m		;e=lsb of jump address
+   238 F044 23			inx	h
+   239 F045 56			mov	d,m		;d=high byte of jump address
+   240 F046 EB			xchg
+   241 F047 E9			pchl			;away we go
+   242
+   243 			; Command Table
+   244
+   245 F048		cmdTbl	dw	ALTBOOT		;B jump to Altair disk boot loader
+            00FF 
+   246 F04A			dw	compr		;C SSSS FFFF CCCC compare blocks
+            DDF1 
+   247 F04C			dw	disp		;D SSSS FFFF dump in hex
+            F9F0 
+   248 F04E			dw	exchg		;E SSSS FFFF DDDD exchange block
+            9BF1 
+   249 F050			dw	srch2		;F SSSS FFFF DD DD two byte search
+            0BF2 
+   250 F052			dw	exec		;G SSSS go to and execute
+            6EF0 
+   251 F054			dw	hexload		;H P load Intel hex file from port
+            89F2 
+   252 F056			dw	pinpt		;I PP input from I/O port
+            6EF2 
+   253 F058			dw	exec		;J SSSS jump to and execute (G)
+            6EF0 
+   254 F05A			dw	fill		;K SSSS FFFF DD fill RAM with "k"onstant
+            73F1 
+   255 F05C			dw	hexload		;L P load Intel hex file from port
+            89F2 
+   256 F05E			dw	moveb		;M SSSS FFFF DDDD move block
+            8FF1 
+   257 F060			dw	ndmt		;N non destructive memory test (RAM size)
+            C3F1 
+   258 F062			dw	poutp		;O PP DD output to port
+            50F2 
+   259 F064			dw	pgm		;P LLLL program memory
+            3BF1 
+   260 F066			dw	chksum		;Q SSSS FFFF compute checksum
+            86F0 
+   261 F068			dw	TARBOOT		;R jump to Tarbell boot PROM
+            00FC 
+   262 F06A			dw	srch1		;S SSSS FFFF DD search for single byte
+            FEF1 
+   263 F06C			dw	tmem		;T SSSS FFFF test memory
+            A0F0 
+   264
+   265 			;--------------------------------------------------------------------------
+   266 			; exec (G or J) - execute the program at the address
+   267 			;--------------------------------------------------------------------------
+   268 F06E CD BA F3	exec	call	dspMsg
+   269 F071			db	'GOT','O'+80h
+            47 4F 54 4F 
+            80 
+   270
+   271 F076 CD 35 F3		call	ahex		;read address from keyboard
+   272 F079 EB			xchg
+   273 F07A E9			pchl
+   274
+   275 			;--------------------------------------------------------------------------
+   276 			; doBoot (B) - boot Altair floppy disk by jumping to DBL PROM at FF00
+   277 			;--------------------------------------------------------------------------
+   278 F07B CD BA F3	doBoot	call	dspMsg
+   279 F07E			db	'BOO','T'+80h
+            42 4F 4F 54 
+            80 
+   280
+   281 F083 C3 00 FF		jmp	ALTBOOT
+   282
+   283 			;--------------------------------------------------------------------------
+   284 			; chksum (Q) - compute checksum
+   285 			;--------------------------------------------------------------------------
+   286 F086 CD BA F3	chksum	call	dspMsg
+   287 F089			db	'CSU','M'+80h
+            43 53 55 4D 
+            80 
+   288
+   289 F08E CD 32 F3		call	tahex
+   290 F091 06 00		mvi	b,0		;start checksum = 0
+   291
+   292 F093 7E		csloop	mov	a,m		;get data from memory
+   293 F094 80			add	b		;add to checksum
+   294 F095 47			mov	b,a
+   295 F096 CD FF F3		call	bmp
+   296 F099 C2 93 F0		jnz	csloop		;repeat loop
+   297
+   298 F09C 78			mov	a,b		;a=checksum
+   299 F09D C3 8E F3		jmp	pt2		;print checksum and exit
+   300
+   301 			;--------------------------------------------------------------------------
+   302 			; tmem (T) - memory test routine
+   303 			;--------------------------------------------------------------------------
+   304 F0A0 CD BA F3	tmem	call	dspMsg
+   305 F0A3			db	'TES','T'+80h
+            54 45 53 54 
+            80 
+   306
+   307 F0A8 CD 32 F3		call	tahex		;read addresses
+   308 F0AB 01 5A 5A		lxi	b,05a5ah	;init b,c
+   309
+   310 F0AE 3E 2E	cycl	mvi	a,'.'		;display '.' before each cycle
+   311 F0B0 CD 5D F3		call	ptcn
+   312 F0B3 CD EA F0		call	rndm
+   313 F0B6 C5			push	b		;keep all registers
+   314 F0B7 E5			push	h
+   315 F0B8 D5			push	d
+   316
+   317 F0B9 7C		tlop	mov	a,h		;on stack page?
+   318 F0BA FE DF		cpi	(SPTR shr 8)-1	;compare to msb of stack
+   319 F0BC CA C3 F0		jz	skipWr		;in stack, skip write
+   320 F0BF CD EA F0		call	rndm
+   321 F0C2 70			mov	m,b		;write in memory
+   322 F0C3 CD FF F3	skipWr	call	bmp
+   323 F0C6 C2 B9 F0		jnz	tlop		;repeat loop
+   324
+   325 F0C9 D1			pop	d		
+   326 F0CA E1			pop	h		;restore original
+   327 F0CB C1			pop	b		;values
+   328 F0CC E5			push	h
+   329 F0CD D5			push	d
+   330
+   331 F0CE 7C		rlop	mov	a,h		;on stack page?
+   332 F0CF FE DF		cpi	(SPTR shr 8)-1	;compare to msb of stack
+   333 F0D1 CA DC F0		jz	skipRd		;in stack, skip the read
+   334 F0D4 CD EA F0		call	rndm		;generate new sequence
+   335 F0D7 7E			mov	a,m		;read memory
+   336 F0D8 B8			cmp	b		;compare memory
+   337 F0D9 C4 82 F3		cnz	err		;call error routine
+   338 F0DC CD FF F3	skipRd	call	bmp
+   339 F0DF C2 CE F0		jnz	rlop
+   340
+   341 F0E2 D1			pop	d
+   342 F0E3 E1			pop	h
+   343 F0E4 CD DC F3		call	pause
+   344 F0E7 C3 AE F0		jmp	cycl
+   345
+   346 			; rndm - this routine generates random numbers
+   347
+   348 F0EA 78		rndm	mov	a,b		;look at b
+   349 F0EB E6 B4		ani	0b4h		;mask bits
+   350 F0ED A7			ana	a		;clear carry
+   351 F0EE EA F2 F0		jpe	peve		;jump if even
+   352 F0F1 37			stc
+   353 F0F2 79		peve	mov	a,c		;look at c
+   354 F0F3 17			ral			;rotate carry in
+   355 F0F4 4F			mov	c,a		;restore c
+   356 F0F5 78			mov	a,b		;look at b
+   357 F0F6 17			ral			;rotate carry in
+   358 F0F7 47			mov	b,a		;restore b
+   359 F0F8 C9			ret			;return with new b,c
+   360
+   361 			;--------------------------------------------------------------------------
+   362 			; disp (D) - display memory contents
+   363 			;--------------------------------------------------------------------------
+   364 F0F9 CD BA F3	disp	call	dspMsg
+   365 F0FC			db	'DUM','P'+80h
+            44 55 4D 50 
+            80 
+   366
+   367 F101 CD 32 F3		call	tahex		;read addresses
+   368
+   369 F104 E5		dmpLine	push	h		;save address at start of line
+   370 F105 0E 10		mvi	c,16		;16 locations per line
+   371 F107 CD 96 F3		call	ptad		;print current address
+   372
+   373 			; dump line in hex
+   374
+   375 F10A 7E		dmpHex	mov	a,m		;a=byte to display
+   376 F10B CD 8E F3		call	pt2		;display it
+   377 F10E CD 5B F3		call	spce
+   378 F111 23			inx	h	
+   379 F112 0D			dcr	c		;decrement line byte count
+   380 F113 C2 0A F1		jnz	dmpHex		;loop until 16 bytes done
+   381
+   382 			; dump line in ASCII
+   383
+   384 F116 CD 5B F3		call	spce
+   385 F119 E1			pop	h		;hl->start of line
+   386 F11A 0E 10		mvi	c,16		;16 locations per line
+   387
+   388 F11C 7E		dmpAsc	mov	a,m		;a=byte to display
+   389 F11D FE 7F		cpi	7Fh		;test if >= 7Fh
+   390 F11F D2 27 F1		jnc	dspDot		;non printable, show '.'
+   391
+   392 F122 FE 20		cpi	' '		;displayable character?
+   393 F124 D2 29 F1		jnc	dspAsc		;yes, go display it
+   394
+   395 F127 3E 2E	dspDot	mvi	a,'.'		;display '.' instead
+   396
+   397 F129 CD 5D F3	dspAsc	call	ptcn		;display the character
+   398 F12C CD FF F3		call	bmp		;increment hl, possibly de
+   399 F12F 0D			dcr	c		;decrement line byte count
+   400 F130 C2 1C F1		jnz	dmpAsc		;loop until 16 bytes done
+   401
+   402 F133 CD FF F3		call	bmp		;done?
+   403 F136 C8			rz			;yes
+   404 F137 2B			dcx	h		;undo extra bump of hl
+   405 F138 C3 04 F1		jmp	dmpLine		;do another line	
+   406
+   407 			;--------------------------------------------------------------------------
+   408 			; pgm (P) - program memory
+   409 			;--------------------------------------------------------------------------
+   410 F13B CD BA F3	pgm	call	dspMsg
+   411 F13E			db	'PG','M'+80h
+            50 47 4D 80 
+            
+   412
+   413 F142 CD 35 F3		call	ahex		;read address
+   414 F145 EB			xchg
+   415 F146 CD 78 F3		call	crlf
+   416 					
+   417 F149 7E		pglp	mov	a,m		;read memory
+   418 F14A CD 8E F3		call	pt2		;print 2 digits
+   419 F14D 3E 2D		mvi	a,'-'		;load dash
+   420 F14F CD 5D F3		call	ptcn		;print dash
+   421
+   422 F152 CD C8 F3	crig	call	rdcn		;get user input
+   423 F155 FE 20		cpi	' '		;space
+   424 F157 CA 6F F1		jz	con2		;skip if space
+   425 F15A FE 0D		cpi	CR		;skip if CR
+   426 F15C C2 65 F1		jnz	con1
+   427 F15F CD 78 F3		call	crlf		;print CR,LF
+   428 F162 C3 52 F1		jmp	crig		;back for more
+   429
+   430 F165 EB		con1	xchg			;HL->DE
+   431 F166 21 00 00		lxi	h,0		;get 16 bit zero
+   432 F169 0E 02		mvi	c,2		;count 2 digits
+   433 F16B CD 3D F3		call	ahexNr		;convert to hex (no read)
+   434 F16E 73			mov	m,e
+   435 F16F 23		con2	inx	h
+   436 F170 C3 49 F1		jmp	pglp
+   437
+   438 			;--------------------------------------------------------------------------
+   439 			; fill (K) - fill memory with a constant
+   440 			;--------------------------------------------------------------------------
+   441 F173 CD BA F3	fill	call	dspMsg
+   442 F176			db	'FIL','L'+80h
+            46 49 4C 4C 
+            80 
+   443
+   444 F17B CD 32 F3		call	tahex		;read addresses
+   445 F17E E5			push	h		;start addr on stack
+   446 F17F 0E 02		mvi	c,2		;reading 2 digits
+   447 F181 CD 37 F3		call	ahe0		;input fill byte
+   448 F184 EB			xchg			;byte to write from e to l
+   449 F185 E3			xthl			;hl=start addr, stack=fill byte
+   450 F186 C1			pop	b		;c=fill byte from stack
+   451 					
+   452 F187 71		zloop	mov	m,c		;write into memory
+   453 F188 CD FF F3		call	bmp		;compare address, increment h
+   454 F18B C8			rz
+   455 F18C C3 87 F1		jmp	zloop
+   456
+   457 			;--------------------------------------------------------------------------
+   458 			; moveb (M) - move a block of memory
+   459 			; exchg (E) - exhange block of memory
+   460 			;--------------------------------------------------------------------------
+   461 F18F CD BA F3	moveb	call	dspMsg
+   462 F192			db	'MOV','E'+80h
+            4D 4F 56 45 
+            80 
+   463 F197 AF			xra	a		;a=0 means "move" command
+   464 F198 C3 A3 F1		jmp	doMove
+   465
+   466 F19B CD BA F3	exchg	call	dspMsg
+   467 F19E			db	'EXC','H'+80h
+            45 58 43 48 
+            80 
+   468 							;a returned <> 0 means "exchange" command
+   469 					
+   470 F1A3 47		doMove	mov	b,a		;save move/exchange flag in b
+   471 F1A4 CD 32 F3		call	tahex		;read addresses
+   472 F1A7 E5			push	h
+   473 F1A8 CD 35 F3		call	ahex
+   474 F1AB EB			xchg
+   475 F1AC E3			xthl			;HL->start, DE->end, stack has dest
+   476
+   477 F1AD 4E		mloop	mov	c,m		;c=byte from source
+   478 F1AE E3			xthl			;hl->destination
+   479
+   480 F1AF 78			mov	a,b		;move or exchange?
+   481 F1B0 B7			ora	a
+   482 F1B1 CA B8 F1		jz	nexch		;0 means move only
+   483
+   484 F1B4 7E			mov	a,m		;a=from destination
+   485 F1B5 E3			xthl			;hl->source
+   486 F1B6 77			mov	m,a		;move destination to source
+   487 F1B7 E3			xthl			;hl->destination
+   488
+   489 F1B8 71		nexch	mov	m,c		;move source to destination
+   490 F1B9 23			inx	h		;increment destination
+   491 F1BA E3			xthl			;hl->source
+   492 F1BB CD FF F3		call	bmp		;increment source and compare to end
+   493 F1BE C2 AD F1		jnz	mloop
+   494
+   495 F1C1 E1			pop	h		;remove temp pointer from stack
+   496 F1C2 C9			ret			;and exit
+   497
+   498 			;--------------------------------------------------------------------------
+   499 			; ndmt (N or R) - non destructive memory test (size RAM)
+   500 			;--------------------------------------------------------------------------
+   501 F1C3 CD BA F3	ndmt	call	dspMsg
+   502 F1C6			db	'RAMTO','P'+80h
+            52 41 4D 54 
+            4F 50 80 
+   503
+   504 F1CD 21 FF FF		lxi	h,0ffffh	;start at zero
+   505
+   506 F1D0 23		ndlop	inx	h
+   507 F1D1 7E			mov	a,m		;read from address in hl
+   508 F1D2 47			mov	b,a		;save original value in b
+   509 F1D3 2F			cma			;form and write inverted value
+   510 F1D4 77			mov	m,a
+   511 F1D5 BE			cmp	m		;read and compare
+   512 F1D6 70			mov	m,b		;restore original value
+   513 F1D7 CA D0 F1		jz	ndlop		;keep going if still RAM
+   514
+   515 F1DA C3 82 F3		jmp	err		;display end of RAM
+   516
+   517 			;--------------------------------------------------------------------------
+   518 			; compr (C) - compare two blocks of memory
+   519 			;--------------------------------------------------------------------------
+   520 F1DD CD BA F3	compr	call	dspMsg
+   521 F1E0			db	'COM','P'+80h
+            43 4F 4D 50 
+            80 
+   522
+   523 F1E5 CD 32 F3		call	tahex		;read addresses
+   524 F1E8 E5			push	h		;source start on stack
+   525 F1E9 CD 35 F3		call	ahex
+   526 F1EC EB			xchg			;de=source end, hl=compare start
+   527
+   528 F1ED 7E		vmlop	mov	a,m		;a=compare byte
+   529 F1EE 23			inx	h
+   530 F1EF E3			xthl			;hl->source byte
+   531 F1F0 BE			cmp	m		;same?
+   532 F1F1 46			mov	b,m		;b=source byte
+   533 F1F2 C4 82 F3		cnz	err		;display the error
+   534 F1F5 CD FF F3		call	bmp		;increment pointers
+   535 F1F8 E3			xthl			;hl->compare byte
+   536 F1F9 C2 ED F1		jnz	vmlop
+   537
+   538 F1FC E1			pop	h		;remove temp pointer from stack
+   539 F1FD C9			ret			;and exit
+   540
+   541 			;--------------------------------------------------------------------------
+   542 			; srch1 (S) - search for one byte
+   543 			; srch2 (F) - search for two bytes
+   544 			;--------------------------------------------------------------------------
+   545 F1FE CD BA F3	srch1	call	dspMsg
+   546 F201			db	'FIND','1'+80h
+            46 49 4E 44 
+            31 80 
+   547 F207 AF			xra	a		;zero flag means one byte search
+   548 F208 C3 14 F2		jmp	doSrch
+   549
+   550 F20B CD BA F3	srch2	call	dspMsg
+   551 F20E			db	'FIND','2'+80h
+            46 49 4E 44 
+            32 80 
+   552 							;a returned <> 0 means two byte search
+   553
+   554 F214 F5		doSrch	push	psw		;save 1/2 byte flag on stack
+   555 F215 CD 32 F3		call	tahex
+   556
+   557 F218 E5			push	h		;save h, getting 1st byte to find
+   558 F219 0E 02		mvi	c,2		;reading 2 hex digits
+   559 F21B CD 37 F3		call	ahe0		;
+   560 F21E EB			xchg			;h=code, d=f
+   561 F21F 45			mov	b,l		;put code in b
+   562 F220 E1			pop	h		;restore h
+   563
+   564 F221 F1			pop	psw		;a=one/two byte flag
+   565 F222 B7			ora	a		;zero true if one byte search
+   566 F223 F5			push	psw
+   567 F224 CA 30 F2		jz	cont
+   568
+   569 F227 E5			push	h		;save h, getting 2nd byte to find
+   570 F228 0E 02		mvi	c,2
+   571 F22A CD 37 F3		call	ahe0
+   572 F22D EB			xchg
+   573 F22E 4D			mov	c,l
+   574 F22F E1			pop	h
+   575
+   576 F230 7E		cont	mov	a,m		;read memory
+   577 F231 B8			cmp	b		;compare to code
+   578 F232 C2 48 F2		jnz	skp		;skip if no compare
+   579
+   580 F235 F1			pop	psw		;a=one/two byte flag
+   581 F236 B7			ora	a		;zero true if one byte serach
+   582 F237 F5			push	psw
+   583 F238 CA 42 F2		jz	obcp
+   584
+   585 F23B 23			inx	h		;two byte search
+   586 F23C 7E			mov	a,m
+   587 F23D 2B			dcx	h
+   588 F23E B9			cmp	c
+   589 F23F C2 48 F2		jnz	skp
+   590
+   591 F242 23		obcp	inx	h
+   592 F243 7E			mov	a,m		;read next byte
+   593 F244 2B			dcx	h		;decr address
+   594 F245 CD 82 F3		call	err		;print data found
+   595
+   596 F248 CD FF F3	skp	call	bmp		;check if done
+   597 F24B C2 30 F2		jnz	cont		;back for more
+   598 F24E F1			pop	psw		;remove flag saved on stack
+   599 F24F C9			ret
+   600
+   601 			;--------------------------------------------------------------------------
+   602 			; poutp (O) - output data to a port
+   603 			;--------------------------------------------------------------------------
+   604 F250 CD BA F3	poutp	call	dspMsg
+   605 F253			db	'OU','T'+80h
+            4F 55 54 80 
+            
+   606
+   607 F257 0E 02		mvi	c,2
+   608 F259 CD 37 F3		call	ahe0		;port number in e
+   609
+   610 F25C 0E 02		mvi	c,2
+   611 F25E CD 37 F3		call	ahe0		;port to l, data in e
+   612
+   613 F261 55			mov	d,l		;d=port
+   614 F262 21 D1 DF		lxi	h,SPTR-30h	;form OUT nn, RET in memory at h
+   615 F265 36 C9		mvi	m,0c9h		;RET opcode
+   616 F267 2B			dcx	h
+   617 F268 72			mov	m,d		;output port for OUT instruction
+   618 F269 2B			dcx	h
+   619 F26A 36 D3		mvi	m,0D3H		;OUT opcode
+   620 F26C 7B			mov	a,e
+   621 F26D E9			pchl			;call OUT, RET
+   622
+   623 			;--------------------------------------------------------------------------
+   624 			; pinpt (I) - input data from a port
+   625 			;--------------------------------------------------------------------------
+   626 F26E CD BA F3	pinpt	call	dspMsg
+   627 F271			db	'I','N'+80h
+            49 4E 80 
+   628
+   629 F274 0E 02		mvi	c,2
+   630 F276 CD 37 F3		call	ahe0		;port number to e
+   631
+   632 F279 21 D1 DF		lxi	h,SPTR-30H	;form IN nn, RET in memory at h
+   633 F27C 36 C9		mvi	m,0C9H		;RET opcode
+   634 F27E 2B			dcx	h
+   635 F27F 73			mov	m,e		;input port of IN instruction
+   636 F280 2B			dcx	h
+   637 F281 36 DB		mvi	m,0DBH		;IN opcode
+   638 F283 CD CF DF		call	SPTR-32H
+   639 F286 C3 8E F3		jmp	pt2
+   640
+   641 			;---------------------------------------------------------------------
+   642 			; hexLoad (H or L) - load intel hex through 2SIO serial port 0 or 1
+   643 			;---------------------------------------------------------------------
+   644 F289 CD BA F3	hexload	call	dspMsg
+   645 F28C			db	'HEXLOA','D'+80h
+            48 45 58 4C 
+            4F 41 44 80 
+            
+   646
+   647 F294 0E 01		mvi	c,1		;read one hex digit
+   648 F296 CD 37 F3		call	ahe0		;digit is in e
+   649 F299 21 E1 DF		lxi	h,SIOPORT	;hl->location on stack to save port
+   650 F29C 73			mov	m,e		;SIOPORT = 0 or 1
+   651
+   652 			; rcvLine - receive a hex file line
+   653
+   654 F29D CD 78 F3	rcvLine	call	crlf
+   655 F2A0 0E 00		mvi	c,0		;clear echo character flag
+   656
+   657 F2A2 CD 08 F3	wtMark	call	getChar		;read next character
+   658 F2A5 D6 3A		sui	':'		;record marker?
+   659 F2A7 C2 A2 F2		jnz	wtMark		;no, keep looking
+   660
+   661 			; Have start of new record. Save the byte count and load address.
+   662 			;   The load address is echoed to the screen so the user can
+   663 			;   see the file load progress.
+   664
+   665 F2AA 57			mov	d,a		;init checksum in D to zero
+   666
+   667 F2AB CD EA F2		call	iByte		;input two hex digits (byte count)
+   668 F2AE 7B			mov	a,e		;test for zero byte count
+   669 F2AF B7			ora	a
+   670 F2B0 CA D8 F2		jz	flush		;count of 0 means end
+   671
+   672 F2B3 43			mov	b,e		;B = byte count on line
+   673
+   674 F2B4 0C			inr	c		;set echo flag for address bytes
+   675 F2B5 CD EA F2		call	iByte		;get MSB of address
+   676 F2B8 63			mov	h,e		;H = address MSB
+   677 F2B9 CD EA F2		call	iByte		;get LSB of address
+   678 F2BC 6B			mov	l,e		;L = address LSB
+   679 F2BD 0D			dcr	c		;clear echo flag
+   680
+   681 F2BE CD EA F2		call	iByte		;ignore/discard record type
+   682
+   683 			; Receive the data bytes of the record and move to memory
+   684
+   685 F2C1 CD EA F2	data	call	iByte		;read a data byte (2 hex digits)
+   686 F2C4 73			mov	m,e		;store in memory
+   687 F2C5 23			inx	h
+   688 F2C6 05			dcr	b
+   689 F2C7 C2 C1 F2		jnz	data
+   690
+   691 			; Validate checksum
+   692
+   693 F2CA CD EA F2		call	iByte		;read and add checksum
+   694 F2CD CA 9D F2		jz	rcvLine		;checksum good, receive next line
+   695
+   696 F2D0 CD BA F3		call	dspMsg		;display error message
+   697 F2D3			db	' ER','R'+80h
+            20 45 52 52 
+            80 
+   698 							;fall into flush
+   699
+   700 			; flush - flush rest of file as it comes in until no characters
+   701 			;    received for about 1/4 second to prevent incoming file
+   702 			;    data looking like typed monitor commands. Only the console
+   703 			;    port needs to be flushed. 
+   704
+   705 F2D8 DB 11	flush	in	COND		;clear possible received char
+   706 F2DA 11 B1 28		lxi	d,10417		;.25s timeout for 48 cycle loop
+   707
+   708 F2DD DB 10	flshLp	in	CONS		;(10) look for character on console
+   709 F2DF 0F			rrc			;(4) data flag in carry
+   710 F2E0 DA D8 F2		jc	flush		;(10) data received, restart
+   711
+   712 F2E3 1B			dcx	d		;(5) decrement timeout
+   713 F2E4 7A			mov	a,d		;(5)
+   714 F2E5 B3			ora	e		;(4)
+   715 F2E6 C2 DD F2		jnz	flshLp		;(10) loop until zero
+   716 F2E9 C9			ret			;done
+   717
+   718 			;-----------------------------------------------------------
+   719 			; iByte	- read two ascii hex bytes and return binary
+   720 			;    value in e. 
+   721 			;-----------------------------------------------------------
+   722 F2EA CD 08 F3	iByte	call	getChar		;get a character
+   723 F2ED CD 00 F3		call	asc2Bin		;ascii hex digit to binary
+   724 F2F0 87			add	a		;put in msn, zero lsn
+   725 F2F1 87			add	a
+   726 F2F2 87			add	a
+   727 F2F3 87			add	a
+   728 F2F4 5F			mov	e,a		;save byte with MSN in E
+   729
+   730 			; 2nd byte (LSN)
+   731
+   732 F2F5 CD 08 F3		call	getChar		;get a character
+   733 F2F8 CD 00 F3		call	asc2Bin		;ascii hex digit to binary
+   734 F2FB 83			add	e		;combine msn and lsn
+   735 F2FC 5F			mov	e,a		;save in EH
+   736 F2FD 82			add	d		;add character to checksum
+   737 F2FE 57			mov	d,a
+   738 F2FF C9			ret		
+   739
+   740 			;-------------------------------------------------------------
+   741 			; asc2Bin - ASCII hex digit to binary conversion. Digit
+   742 			;    passed in a, returned in a. Errors ignored as checksum
+   743 			;    will eventually kick this out.
+   744 			;-------------------------------------------------------------
+   745 F300 D6 30	asc2Bin	sui	'0'		;'0' to 0
+   746 F302 FE 0A		cpi	10		;0-9 ?
+   747 F304 D8			rc
+   748
+   749 F305 D6 07		sui	7		;'A-F' to A-F
+   750 F307 C9			ret
+   751
+   752 			;-------------------------------------------------------------
+   753 			; getChar - read a character from the 2SIO port specified in
+   754 			;    SIOPORT. The character is also echoed to the console port
+   755 			;    if the echo flag (c) is set (non-zero)
+   756 			;-------------------------------------------------------------
+   757 F308 C5		getChar	push	b		;save b,c
+   758 F309 3A E1 DF		lda	SIOPORT		;a=pseudo port to use
+   759 F30C B7			ora	a		;port zero?
+   760 F30D C2 19 F3		jnz	inWait1		;no, use port 1
+   761
+   762 			; in through 1st port (0) on 2SIO
+   763
+   764 F310 CD EB F3	inWait0	call	cntlc		;test for character from console
+   765 F313 CA 10 F3		jz	inWait0
+   766 F316 C3 24 F3		jmp	haveChr
+   767
+   768 			; in through 2nd port (1) on 2SIO, check for ctrl-c on console
+   769 			;    while waiting
+   770
+   771 F319 CD EB F3	inWait1	call	cntlc		;look for ctrl-c on console
+   772 F31C DB 12		in	CONS+2		;wait for character on 2nd 2SIO
+   773 F31E 0F			rrc			;data flag in carry
+   774 F31F D2 19 F3		jnc	inWait1
+   775 F322 DB 13		in	COND+2		;a=character read
+   776
+   777 			; process new character in a. Echo to console if c is non-zero
+   778
+   779 F324 47		haveChr	mov	b,a		;save character in b
+   780 F325 79			mov	a,c		;echo flag (c) set?
+   781 F326 B7			ora	a
+   782 F327 CA 2F F3		jz	noEcho		;no echo
+   783
+   784 F32A 78			mov	a,b		;a=character to send
+   785 F32B C1			pop	b		;restore b,c
+   786 F32C C3 5D F3		jmp	ptcn		;display character and exit
+   787
+   788 F32F 78		noEcho	mov	a,b		;a=byte read
+   789 F330 C1			pop	b		;restore b,c
+   790 F331 C9			ret
+   791
+   792 			;********************************************************************
+   793 			;
+   794 			;  Type conversion, input, output subroutines
+   795 			;
+   796 			;********************************************************************
+   797
+   798 			;------------------------------------------------------------
+   799 			; tahex - read two 16 bit addresses. 1st returned in HL, 2nd in DE
+   800 			;------------------------------------------------------------
+   801 F332 CD 35 F3	tahex	call	ahex		;get first address param
+   802 							;fall into ahex to get 2nd param
+   803
+   804 			;------------------------------------------------------------
+   805 			; ahex - read up to 4 hex digits to binary, return in de
+   806 			;------------------------------------------------------------
+   807 F335 0E 04	ahex	mvi	c,4		;count of 4 digits
+   808 F337 21 00 00	ahe0	lxi	h,0		;16 bit zero
+   809 F33A CD C8 F3	ahe1	call	rdcn		;read a byte
+   810 F33D FE 30	ahexNr	cpi	'0'
+   811 F33F DA 23 F0		jc	start		;below '0', abort
+   812 F342 FE 3A		cpi	':'
+   813 F344 D4 6B F3		cnc	alph
+   814 F347 29			dad	h
+   815 F348 29			dad	h
+   816 F349 29			dad	h
+   817 F34A 29			dad	h
+   818 F34B D6 30		sui	'0'		;ascii bias
+   819 F34D FE 0A		cpi	10		;digit 0-10
+   820 F34F DA 54 F3		jc	alf
+   821 F352 D6 07		sui	7		;alpha bias
+   822 F354 85		alf	add	l
+   823 F355 6F			mov	l,a
+   824 F356 0D			dcr	c
+   825 F357 C2 3A F3		jnz	ahe1		;keep reading
+   826 F35A EB			xchg			;result in de
+   827 							;fall through to print a space
+   828 			;------------------------------------------------------------
+   829 			; spce - print a space
+   830 			; ptcn - print character passed in a
+   831 			;------------------------------------------------------------
+   832 F35B 3E 20	spce	mvi	a,' '		;print space
+   833 F35D F5		ptcn	push	psw
+   834
+   835 F35E DB 10	ptlop	in	CONS		;wait for OK to transmit
+   836 F360 E6 02		ani	TBE
+   837 F362 CA 5E F3		jz	ptlop
+   838
+   839 F365 F1			pop	psw		;recover a
+   840 F366 E6 7F		ani	07fh		;get rid of msbit
+   841 F368 D3 11		out	COND		;and print it
+   842 F36A C9			ret			;return from ptcn
+   843
+   844 			;------------------------------------------------------------
+   845 			; alph - verify valid hex digit, abort to command loop if not
+   846 			;------------------------------------------------------------
+   847 F36B FE 41	alph	cpi	'A'
+   848 F36D DA 23 F0		jc	start
+   849 F370 E6 5F		ani	05fh
+   850 F372 FE 47		cpi	'G'
+   851 F374 D2 23 F0		jnc	start
+   852 F377 C9			ret
+   853
+   854 			;------------------------------------------------------------
+   855 			; crlf - print CR/LF
+   856 			;------------------------------------------------------------
+   857 F378 3E 0D	crlf	mvi	a,CR
+   858 F37A CD 5D F3		call	ptcn
+   859 F37D 3E 0A		mvi	a,LF	
+   860 F37F C3 5D F3		jmp	ptcn
+   861
+   862 			;------------------------------------------------------------
+   863 			; err - display the address in hl followed by the value
+   864 			;    in b, then the value in a.
+   865 			;------------------------------------------------------------
+   866 F382 F5		err	push	psw		;save A
+   867 F383 CD 96 F3		call	ptad		;print address
+   868 F386 78			mov	a,b		;print B
+   869 F387 CD 8E F3		call	pt2
+   870 F38A CD 5B F3		call	spce
+   871 F38D F1			pop	psw		;print A
+   872 F38E F5		pt2	push	psw
+   873 F38F CD A8 F3		call	binh
+   874 F392 F1			pop	psw
+   875 F393 C3 AC F3		jmp	binl
+   876
+   877 			;------------------------------------------------------------
+   878 			; ptad - display the address in h
+   879 			;------------------------------------------------------------
+   880 F396 CD 78 F3	ptad	call	crlf		;print cr,lf
+   881 F399 CD DC F3		call	pause
+   882 F39C 7C			mov	a,h		;print
+   883 F39D CD 8E F3		call	pt2		;ascii
+   884 F3A0 7D			mov	a,l		;codes
+   885 F3A1 CD 8E F3		call	pt2		;for
+   886 F3A4 CD 5B F3		call	spce		;address
+   887 F3A7 C9			ret
+   888
+   889 			;------------------------------------------------------------
+   890 			; binh - print MSN of byte passed in A
+   891 			; binl - print LSN of byte passed in A
+   892 			;------------------------------------------------------------
+   893 F3A8 1F		binh	rar
+   894 F3A9 1F			rar
+   895 F3AA 1F			rar
+   896 F3AB 1F			rar
+   897 F3AC E6 0F	binl	ani	0fh		;low 4 bits
+   898 F3AE C6 30		adi	'0'		;ascii bias
+   899 F3B0 FE 3A		cpi	03ah		;digit 0-9
+   900 F3B2 DA 5D F3		jc	ptcn
+   901 F3B5 C6 07		adi	7		;digit A-F
+   902 F3B7 C3 5D F3		jmp	ptcn
+   903
+   904 			;------------------------------------------------------------
+   905 			; dspMsg - display in-line message. String terminated by byte
+   906 			;      with msbit set.
+   907 			;------------------------------------------------------------
+   908 F3BA E1		dspMsg	pop	h		;hl->string to display
+   909
+   910 F3BB 7E		dspLoop	mov	a,m		;a=next character to display
+   911 F3BC CD 5D F3		call	ptcn		;display character
+   912 F3BF B6			ora	m		;MSB set? (last byte)
+   913 F3C0 23			inx	h		;point to next character
+   914 F3C1 F2 BB F3		jp	dspLoop		;no, keep looping
+   915
+   916 F3C4 CD 5B F3		call	spce		;display a trailing space
+   917 F3C7 E9			pchl			;return past the string
+   918
+   919 			;------------------------------------------------------------
+   920 			; rdcn - read from console to A with echo to screen
+   921 			; getCon - read from console to A without echo
+   922 			;------------------------------------------------------------
+   923 F3C8 CD D1 F3	rdcn	call	getCon		;get character from console
+   924 F3CB FE 1B		cpi	ESC		;ESC confuses smart terminals
+   925 F3CD C8			rz			;    so don't echo escape
+   926 F3CE C3 5D F3		jmp	ptcn		;echo onto printer
+   927
+   928 F3D1 DB 10	getCon	in	CONS		;read keyboard status
+   929 F3D3 0F			rrc			;data available flag in carry
+   930 F3D4 D2 D1 F3		jnc	getCon
+   931
+   932 F3D7 DB 11		in	COND		;read from keyboard
+   933 F3D9 E6 7F		ani	07fh		;strip off msb
+   934 F3DB C9			ret
+   935
+   936 			;------------------------------------------------------------
+   937 			; pause - pause/resume with spacebar. Also look for a ctrl-c
+   938 			;    or ESC to abort.
+   939 			;------------------------------------------------------------
+   940 F3DC CD EB F3	pause	call	cntlc		;look for abort or other character
+   941 F3DF FE 20		cpi	' '
+   942 F3E1 C0			rnz			;return if not space or abort
+   943
+   944 F3E2 CD EB F3	ploop	call	cntlc		;loop here until space or abort pressed
+   945 F3E5 FE 20		cpi	' '
+   946 F3E7 C2 E2 F3		jnz	ploop
+   947 F3EA C9			ret
+   948
+   949 			;------------------------------------------------------------
+   950 			; cntlc - see if a character has been typed. If not, return
+   951 			;   zero true. If ctrl-c or ESC typed, abort and return to 
+   952 			;   the command loop. Otherwise, return the character typed.
+   953 			;------------------------------------------------------------
+   954 F3EB DB 10	cntlc	in	CONS		;anything typed?
+   955 F3ED E6 01		ani	RDA
+   956 F3EF C8			rz			;no, exit with zero true
+   957
+   958 F3F0 DB 11		in	COND		;get the typed character
+   959 F3F2 E6 7F		ani	07fh
+   960 F3F4 FE 03		cpi	CTRLC		;abort with ctrl-c (2.0 style)
+   961 F3F6 CA 23 F0		jz	start
+   962 F3F9 FE 1B		cpi	ESC		;or ESC (4.x style)
+   963 F3FB CA 23 F0		jz	start
+   964 F3FE C9			ret
+   965
+   966 			;------------------------------------------------------------
+   967 			; bmp - compare address and increment h. Return zero true
+   968 			;   if hl=de. Once hl=de, then de is incremented each time
+   969 			;   so the comparison remains true for subsequent calls.
+   970 			;------------------------------------------------------------
+   971 F3FF 7B		bmp	mov	a,e		;compare lsb's of hl,de
+   972 F400 95			sub	l
+   973 F401 C2 06 F4		jnz	goon		;not equal
+   974
+   975 F404 7A			mov	a,d		;compare msb's of hl,de
+   976 F405 9C			sbb	h		;gives zero true if equal
+   977
+   978 F406 23		goon	inx	h		;increment hl
+   979 F407 C0			rnz			;exit if hl <> de yet
+   980
+   981 F408 13			inx	d		;increase de as well so it will
+   982 F409 C9			ret			;    still be equal next time
+   983 			;
+   984 			;----------------------------------------------------------------
+   985 			; the CPM3 boot loader loader....   i.e.  boot the CPMLDR.COM file 
+   986 			; off the first few sectors of the disk.  Put it at 0x0100 and when
+   987 			; done loading, jump to the start point.
+   988 			;----------------------------------------------------------------
+   989 			;
+   990      F4 0A	IMSBoot	equ	$
+   991 F40A 3E 03		mvi	a,3		;reset 6850 uart
+   992 F40C D3 10		out	CONS
+   993 F40E D3 12		out	CONS+2		;2nd 2SIO port as well
+   994 F410 3E 11		mvi	a,11h		;8N1 divide 1
+   995 F412 D3 10		out	CONS
+   996 F414 D3 12		out	CONS+2		;2nd 2SIO port as well
+   997 F416 31 01 E0		lxi	sp,SPTR
+   998 F419 CD 5D F6		call	SELECTA
+   999 F41C CD 1C F6		call	IDEinit
+  1000 			CPMBOOT:                        ;Boot CPM from IDE system tracks -- if present
+  1001 F41F AF		        XRA     A               ;Load from track 0,sec 1, head 0 (Always)
+  1002 F420 32 09 DF		sta	@NOHOLEMODE
+  1003 F423 32 08 DF	        STA     @TRK+1
+  1004 F426 32 07 DF	        STA     @TRK
+  1005 F429 3A 09 DF	        LDA     @NOHOLEMODE     ;Conveniently, this is 0 for hole mode, 1 for no hole mode
+  1006 F42C 32 02 DF	        STA     @SEC
+  1007
+  1008 F42F 3E 0C	        MVI     A,CPMBOOTCOUNT ;Count of CPMLDR sectors  (12)
+  1009 F431 32 04 DF	        STA     @SECTORCOUNT
+  1010 F434 21 00 01	        LXI     H,CPMLDRADDRESS ;DMA address where the CPMLDR resides in RAM (100H)
+  1011 F437 22 05 DF	        SHLD    @DMA
+  1012
+  1013 			NextRCPM:
+  1014 F43A CD A2 F4	        CALL    wrlba           ;Update LBA on drive
+  1015 F43D CD 97 F5	        CALL    DISPLAYposition ;Display current Track,sector,head#
+  1016 F440 CD 0C F6	        CALL    ZCRLF
+  1017
+  1018 F443 2A 05 DF	        LHLD    @DMA
+  1019 F446 CD 63 F4	        CALL    READSECTOR      ;read a sector
+  1020 F449 22 05 DF	        SHLD    @DMA
+  1021
+  1022 F44C 3A 04 DF	        LDA     @SECTORCOUNT
+  1023 F44F 3D		        DCR     A
+  1024 F450 32 04 DF	        STA     @SECTORCOUNT
+  1025 F453 CA 60 F4	        JZ      LOADDONE
+  1026
+  1027 F456 2A 02 DF	        LHLD    @SEC
+  1028 F459 23		        INX     H
+  1029 F45A 22 02 DF	        SHLD    @SEC            ;Note we assume we alway will stay on tarck 0 in this special case
+  1030 F45D C3 3A F4	        JMP     NextRCPM
+  1031 			LOADDONE:
+  1032 F460 C3 00 01		jmp	CPMLDRADDRESS		; see ya'
+  1033 			READSECTOR:
+  1034 F463 CD A2 F4	        CALL    wrlba           ;Tell which sector we want to read from.
+  1035 			                                ;Note: Translate first in case of an error otherewise we
+  1036 			                                ;will get stuck on bad sector
+  1037 F466 CD DE F4	        CALL    IDEwaitnotbusy  ;make sure drive is ready
+  1038 F469 DA 19 F6	        JC      SHOWerrors      ;Returned with NZ set if error
+  1039 F46C 16 20	        MVI     D,COMMANDread
+  1040 F46E 1E 0F	        MVI     E,REGcommand
+  1041 F470 CD 04 F5	        CALL    IDEwr8D         ;Send sec read command to drive.
+  1042 F473 CD 71 F5	        CALL    IDEwaitdrq      ;wait until it's got the data
+  1043 F476 DA 19 F6	        JC      SHOWerrors
+  1044 F479 2A 05 DF	        LHLD    @DMA            ;DMA address
+  1045 F47C 06 00	        MVI     B,0             ;Read 512 bytes to [HL] (256X2 bytes)
+  1046 			MoreRD16:
+  1047 F47E 3E 08	        MVI     A,REGdata       ;REG regsiter address
+  1048 F480 D3 32	        OUT     IDEportC
+  1049 F482 F6 40	        ORI     IDErdline       ;08H+40H, Pulse RD line
+  1050 F484 D3 32	        OUT     IDEportC
+  1051 F486 DB 30	        IN      IDEportA        ;Read the lower byte first (Note very early versions had high byte then low byte
+  1052 F488 77		        MOV     M,A             ;this made sector data incompatable with other controllers).
+  1053 F489 23		        INX     H
+  1054 F48A DB 31	        IN      IDEportB        ;THEN read the upper byte
+  1055 F48C 77		        MOV     M,A
+  1056 F48D 23		        INX     H
+  1057 F48E 3E 08	        MVI     A,REGdata       ;Deassert RD line
+  1058 F490 D3 32	        OUT     IDEportC
+  1059 F492 05		        dcr     b
+  1060 F493 C2 7E F4	        jnz     MoreRD16
+  1061 F496 1E 0F	        MVI     E,REGstatus
+  1062 F498 CD 1D F5	        CALL    IDErd8D
+  1063 F49B 7A		        MOV     A,D
+  1064 F49C E6 01	        ANI     1H
+  1065 F49E C4 19 F6	        CNZ     SHOWerrors      ;If error display status
+  1066 F4A1 C9		        RET
+  1067 			wrlba:
+  1068
+  1069 F4A2 CD DE F4	        CALL    IDEwaitnotbusy  ;Make sure drive isn't busy...
+  1070 F4A5 DA 19 F6	        JC      SHOWErrors      ;If error, display status
+  1071 F4A8 3A 09 DF	        LDA     @NOHOLEMODE     ;Are we leaving original holes, or not?
+  1072 F4AB B7		        ORA     A
+  1073 F4AC CA B2 F4	        JZ      wrlbaHoles      ;Leaving original holes
+  1074 F4AF C3 2E F5	        JMP     wrlbaNoHoles    ;No holes
+  1075
+  1076
+  1077 			wrlbaHoles:                     ;Write the logical block address to the drive's registers
+  1078 			                                ;Note we do not need to set the upper nibble of the LBA
+  1079 			                                ;It will always be 0 for these small drives
+  1080 F4B2 3A 02 DF	        LDA     @SEC            ;LBA mode Low sectors go directly
+  1081 F4B5 3C		        INR     A               ;Sectors are numbered 1 -- MAXSEC (even in LBA mode)
+  1082 F4B6 32 0B DF	        STA     @DRIVESEC       ;For Diagnostic Display Only
+  1083 F4B9 57		        MOV     D,A
+  1084 F4BA 1E 0B	        MVI     E,REGsector     ;Send info to drive
+  1085 F4BC CD 04 F5	        CALL    IDEwr8D         ;Note: For drive we will have 0 - MAXSEC sectors only
+  1086
+  1087 F4BF 2A 07 DF	        LHLD    @TRK
+  1088 F4C2 7D		        MOV     A,L
+  1089 F4C3 32 0D DF	        STA     @DRIVETRK
+  1090 F4C6 55		        MOV     D,L             ;Send Low TRK#
+  1091 F4C7 1E 0C	        MVI     E,REGcylinderLSB
+  1092 F4C9 CD 04 F5	        CALL    IDEwr8D
+  1093
+  1094 F4CC 7C		        MOV     A,H
+  1095 F4CD 32 0E DF	        STA     @DRIVETRK+1
+  1096 F4D0 54		        MOV     D,H             ;Send High TRK#
+  1097 F4D1 1E 0D	        MVI     E,REGcylinderMSB
+  1098 F4D3 CD 04 F5	        CALL    IDEwr8D
+  1099
+  1100 F4D6 16 01	        MVI     D,1             ;For now, one sector at a time
+  1101 F4D8 1E 0A	        MVI     E,REGseccnt
+  1102 F4DA CD 04 F5	        CALL    IDEwr8D
+  1103 F4DD C9		        RET
+  1104 			IDEwaitnotbusy:                 ;ie Drive READY if 01000000
+  1105 F4DE 06 FF	        MVI     B,0FFH
+  1106 F4E0 3E FF	        MVI     A,0FFH          ;Delay, must be above 80H for 4MHz Z80. Leave longer for slower drives
+  1107 F4E2 32 0F DF	        STA     @DELAYStore
+  1108
+  1109 			MoreWait:
+  1110 F4E5 1E 0F	        MVI     E,REGstatus     ;wait for RDY bit to be set
+  1111 F4E7 CD 1D F5	        CALL    IDErd8D
+  1112 F4EA 7A		        MOV     A,D
+  1113 F4EB E6 C0	        ANI     11000000B
+  1114 F4ED EE 40	        XRI     01000000B
+  1115 F4EF CA 02 F5	        JZ      DoneNotBusy
+  1116 F4F2 05		        DCR     B
+  1117 F4F3 C2 E5 F4	        JNZ     MoreWait
+  1118 F4F6 3A 0F DF	        LDA     @DELAYStore     ;Check timeout delay
+  1119 F4F9 3D		        DCR     A
+  1120 F4FA 32 0F DF	        STA     @DELAYStore
+  1121 F4FD C2 E5 F4	        JNZ     MoreWait
+  1122 F500 37		        STC                     ;Set carry to indicate an error
+  1123 F501 C9		        ret
+  1124 			DoneNotBusy:
+  1125 F502 B7		        ORA     A              
+  1126 F503 C9			RET
+  1127 			IDEwr8D:                                ;WRITE Data in [D] to IDE register in [E]
+  1128 F504 3E 80	        MVI     A,WRITEcfg8255          ;Set 8255 to write mode
+  1129 F506 D3 33	        OUT     IDEportCtrl
+  1130
+  1131 F508 7A		        MOV     A,D                     ;Get data put it in 8255 A port
+  1132 F509 D3 30	        OUT     IDEportA
+  1133
+  1134 F50B 7B		        MOV     A,E                     ;select IDE register
+  1135 F50C D3 32	        OUT     IDEportC
+  1136
+  1137 F50E F6 20	        ORI     IDEwrline               ;lower WR line
+  1138 F510 D3 32	        OUT     IDEportC
+  1139
+  1140 F512 7B		        MOV     A,E                     ;<-- Ken Robbins suggestion, raise WR line
+  1141 F513 D3 32	        OUT     IDEportC                ;deassert RD pin
+  1142
+  1143 F515 AF		        XRA     A                       ;Deselect all lines including WR line
+  1144 F516 D3 32	        OUT     IDEportC
+  1145 F518 3E 92	        MVI     A,READcfg8255           ;Config 8255 chip, read mode on return
+  1146 F51A D3 33	        OUT     IDEportCtrl
+  1147 F51C C9		        RET
+  1148
+  1149 			IDErd8D:                                ;READ 8 bits from IDE register in [E], return info in [D]
+  1150 F51D 7B		        MOV     A,E
+  1151 F51E D3 32	        OUT     IDEportC                ;drive address onto control lines
+  1152
+  1153 F520 F6 40	        ORI     IDErdline               ;RD pulse pin (40H)
+  1154 F522 D3 32	        OUT     IDEportC                ;assert read pin
+  1155
+  1156 F524 DB 30	        IN      IDEportA
+  1157 F526 57		        MOV     D,A                     ;return with data in [D]
+  1158
+  1159 F527 7B		        MOV     A,E                     ;<---Ken Robbins suggestion
+  1160 F528 D3 32	        OUT     IDEportC                ;deassert RD pin
+  1161
+  1162 F52A AF		        XRA     A
+  1163 F52B D3 32	        OUT     IDEportC                ;Zero all port C lines
+  1164 F52D C9		        ret
+  1165 			wrlbaNoHoles:
+  1166 			                                ;Write the logical block address to the drive's registers
+  1167 			                                ;Starting with LBA 0 and without leaving an "holes"
+  1168 F52E 2A 07 DF	        LHLD    @TRK            ;Get the "CPM" requested track High & Low
+  1169 F531 7D		        MOV     A,L             ;Get Low byte of track
+  1170 F532 0F		        RRC                     ;Get bottom two bits in high bits of A
+  1171 F533 0F		        RRC
+  1172 F534 E6 C0	        ANI     0C0H            ;Just what were the bottom two bits (now at the top)
+  1173 F536 4F		        MOV     C,A             ;Save in C
+  1174 F537 3A 02 DF	        LDA     @SEC            ;Sector number in A
+  1175 F53A E6 3F	        ANI     03FH            ;Take only bottom 6 bits, just in case
+  1176 F53C B1		        ORA     C               ;Add in top 2 bits of track
+  1177 F53D 32 0B DF	        STA     @DRIVESEC       ;For diagnostic display only
+  1178 F540 57		        MOV     D,A             ;Send info to the drive
+  1179 F541 1E 0B	        MVI     E,REGsector
+  1180 F543 CD 04 F5	        CALL    IDEwr8D
+  1181
+  1182 F546 7D		        MOV     A,L             ;Get low byte of track again
+  1183 F547 0F		        RRC                     ;Extract out just the top 6 bits
+  1184 F548 0F		        RRC
+  1185 F549 E6 3F	        ANI     03FH
+  1186 F54B 4F		        MOV     C,A             ;Save in C
+  1187 F54C 7C		        MOV     A,H     ;Get high byte of track.
+  1188 F54D 0F		        RRC                     ;Rotate twice, leaving low 2 bits
+  1189 F54E 0F		        RRC                     ;In upper bits of A
+  1190 F54F E6 C0	        ANI     0C0H            ;Mask all but the two bits we want
+  1191 F551 B1		        ORA     C               ;Add in the top 6 bits of the first track byte
+  1192 F552 32 0D DF	        STA     @DRIVETRK
+  1193 F555 57		        MOV     D,A             ;Send Low TRK#
+  1194 F556 1E 0C	        MVI     E,REGcylinderLSB
+  1195 F558 CD 04 F5	        CALL    IDEwr8D
+  1196
+  1197 F55B 7C		        MOV     A,H             ;Get high byte of track
+  1198 F55C 0F		        RRC                     ;Just the top 6 bits
+  1199 F55D 0F		        RRC
+  1200 F55E E6 3F	        ANI     03FH
+  1201 F560 32 0E DF	        STA     @DRIVETRK+1
+  1202 F563 57		        MOV     D,A             ;Send High TRK#
+  1203 F564 1E 0D	        MVI     E,REGcylinderMSB
+  1204 F566 CD 04 F5	        CALL    IDEwr8D
+  1205
+  1206 F569 16 01	        MVI     D,1             ;For now, one sector at a time
+  1207 F56B 1E 0A	        MVI     E,REGseccnt
+  1208 F56D CD 04 F5	        CALL    IDEwr8D
+  1209 F570 C9		        RET
+  1210 			IDEwaitdrq:
+  1211 F571 06 FF	        MVI     B,0FFH
+  1212 F573 3E FF	        MVI     A,0FFH          ;Delay, must be above 80H for 4MHz Z80. Leave longer for slower drives
+  1213 F575 32 0F DF	        STA     @DELAYStore
+  1214
+  1215 			MoreDRQ:
+  1216 F578 1E 0F	        MVI     E,REGstatus     ;wait for DRQ bit to be set
+  1217 F57A CD 1D F5	        CALL    IDErd8D
+  1218 F57D 7A		        MOV     A,D
+  1219 F57E E6 88	        ANI     10001000B
+  1220 F580 FE 08	        CPI     00001000B
+  1221 F582 CA 95 F5	        JZ      DoneDRQ
+  1222 F585 05		        DCR     B
+  1223 F586 C2 78 F5	        JNZ     MoreDRQ
+  1224 F589 3A 0F DF	        LDA     @DELAYStore     ;Check timeout delay
+  1225 F58C 3D		        DCR     A
+  1226 F58D 32 0F DF	        STA     @DELAYStore
+  1227 F590 C2 78 F5	        JNZ     MoreDRQ
+  1228 F593 37		        STC                     ;Set carry to indicate error
+  1229 F594 C9		        RET
+  1230 			DoneDRQ:
+  1231 F595 B7		        ORA     A               ;Clear carry
+  1232 F596 C9		        RET
+  1233 			DISPLAYposition:                ;Display current track,sector & head position
+  1234 F597 11 8C F6	        LXI     D,msgCPMTRK     ;Display in LBA format
+  1235 F59A CD F7 F5	        CALL    PSTRING         ;---- CPM FORMAT ----
+  1236 F59D 3A 08 DF	        LDA     @TRK+1          ;High TRK byte
+  1237 F5A0 CD DA F5	        CALL    phex
+  1238 F5A3 3A 07 DF	        LDA     @TRK            ;Low TRK byte
+  1239 F5A6 CD DA F5	        CALL    phex
+  1240
+  1241 F5A9 11 97 F6	        LXI     D,msgCPMSEC
+  1242 F5AC CD F7 F5	        CALL    PSTRING         ;SEC = (16 bits)
+  1243 F5AF 3A 03 DF	        LDA     @SEC+1          ;High Sec
+  1244 F5B2 CD DA F5	        CALL    phex
+  1245 F5B5 3A 02 DF	        LDA     @SEC            ;Low sec
+  1246 F5B8 CD DA F5	        CALL    phex
+  1247 			                                ;---- LBA FORMAT ----
+  1248 F5BB 11 A3 F6	        LXI     D, msgLBA
+  1249 F5BE CD F7 F5	        CALL    PSTRING         ;(LBA = 00 (<-- Old "Heads" = 0 for these drives).
+  1250 F5C1 3A 0E DF	        LDA     @DRIVETRK+1     ;High "cylinder" byte
+  1251 F5C4 CD DA F5	        CALL    phex
+  1252 F5C7 3A 0D DF	        LDA     @DRIVETRK       ;Low "cylinder" byte
+  1253 F5CA CD DA F5	        CALL    phex
+  1254 F5CD 3A 0B DF	        LDA     @DRIVESEC
+  1255 F5D0 CD DA F5	        CALL    phex
+  1256 F5D3 11 AF F6	        LXI     D, MSGBracket   ;)
+  1257 F5D6 CD F7 F5	        CALL    PSTRING
+  1258 F5D9 C9		        RET
+  1259 			; Print an 8 bit number, located in [A]
+  1260      F5 DA	phex    equ     $
+  1261 F5DA F5		PHEX:   PUSH    PSW
+  1262 F5DB C5		        PUSH    B
+  1263 F5DC F5		        PUSH    PSW
+  1264 F5DD 0F		        RRC
+  1265 F5DE 0F		        RRC
+  1266 F5DF 0F		        RRC
+  1267 F5E0 0F		        RRC
+  1268 F5E1 CD EB F5	        CALL    ZCONV
+  1269 F5E4 F1		        POP     PSW
+  1270 F5E5 CD EB F5	        CALL    ZCONV
+  1271 F5E8 C1		        POP     B
+  1272 F5E9 F1		        POP     PSW
+  1273 F5EA C9		        RET
+  1274
+  1275 F5EB E6 0F	ZCONV:  ANI     0FH             ;HEX to ASCII and print it
+  1276 F5ED C6 90	        ADI     90H
+  1277 F5EF 27		        DAA
+  1278 F5F0 CE 40	        ACI     40H
+  1279 F5F2 27		        DAA
+  1280 F5F3 CD 5D F3	        CALL   	ptcn 
+  1281 F5F6 C9			RET
+  1282 			PSTRING:
+  1283 F5F7 C5		        PUSH    B
+  1284 F5F8 D5		        PUSH    D
+  1285 F5F9 E5		        PUSH    H
+  1286 F5FA EB		        XCHG
+  1287 F5FB 7E		PSTRX:  MOV     A,M
+  1288 F5FC FE 24	        CPI     '$'
+  1289 F5FE CA 08 F6	        JZ      DONEP
+  1290 F601 CD 5D F3	        CALL   	ptcn 
+  1291 F604 23		        INX     H
+  1292 F605 C3 FB F5	        JMP     PSTRX
+  1293 F608 E1		DONEP:  POP     H
+  1294 F609 D1		        POP     D
+  1295 F60A C1		        POP     B
+  1296 F60B C9		        RET
+  1297 			ZCRLF:
+  1298 F60C F5		        PUSH    PSW
+  1299 F60D 3E 0D	        MVI     a,CR
+  1300 F60F CD 5D F3	        CALL   	ptcn 
+  1301 F612 3E 0A	        MVI     a,LF
+  1302 F614 CD 5D F3	        CALL   	ptcn 
+  1303 F617 F1		        POP     PSW
+  1304 F618 C9		        RET
+  1305 			SHOWerrors:
+  1306      F6 19	SHOWErrors equ  $
+  1307 F619 B7		        ORA     A               ;Set NZ flag
+  1308 F61A 37		        STC                     ;Set Carry Flag
+  1309 F61B C9		        RET
+  1310 			IDEinit:
+  1311 F61C C5		        PUSH    B               ;Save used registers
+  1312 F61D D5		        PUSH    D
+  1313 			                                ;Initialze the 8255 and drive then do a hard reset on the drive,
+  1314 F61E 3E 92	        MVI     A,READcfg8255   ;Config 8255 chip (10010010B), read mode on return
+  1315 F620 D3 33	        OUT     IDEportCtrl     ;Config 8255 chip, READ mode
+  1316
+  1317 			                                ;Hard reset the disk drive
+  1318 			                                ;For some reason some CF cards need to the RESET line
+  1319 			                                ;pulsed very carefully. You may need to play around
+  1320 F622 3E 80	        MVI     A,IDErstline    ;with the pulse length. Symptoms are: incorrect data comming
+  1321 F624 D3 32	        OUT     IDEportC        ;back from a sector read (often due to the wrong sector being read)
+  1322 			                                ;I have a (negative)pulse of 2.7uSec. (10Mz Z80, two IO wait states).
+  1323 F626 06 20	        MVI     B,20H           ;Which seem to work for the 5 different CF cards I have.
+  1324 			ResetDelay:
+  1325 F628 05		        DCR     B
+  1326 F629 C2 28 F6	        JNZ     ResetDelay      ;Delay (reset pulse width)
+  1327 F62C AF		        XRA     A
+  1328 F62D D3 32	        OUT     IDEportC        ;No IDE control lines asserted (just bit 7 of port C)
+  1329 F62F CD 64 F6	        CALL    DELAYSHORT      ;Short Delay
+  1330 F632 CD DE F4	        CALL    IDEwaitnotbusy  ;Wait for drive
+  1331 F635 DA 87 F6	        JC      WaitInitErr
+  1332 F638 16 E0	        MVI     D,11100000b     ;Data for IDE SDH reg (512bytes, LBA mode,single drive,head 0000)
+  1333 			                                ;For Trk,Sec,head (non LBA) use 10100000
+  1334 			                                ;Note. Cannot get LBA mode to work with an old Seagate Medalist 6531 drive.
+  1335 			                                ;have to use the non-LBA mode. (Common for old hard disks).
+  1336
+  1337 F63A 1E 0E	        MVI     E,REGshd        ;00001110,(0EH) for CS0,A2,A1,
+  1338 F63C CD 04 F5	        CALL    IDEwr8D         ;Write byte to select the MASTER device
+  1339 F63F 06 02	        MVI     B,02H           ;<<< Adjust delay time for hard disks to get up to speed (Currently ~ 2 seconds)
+  1340 			                                ;<<< This delay need to be much longer for actual Hard Disks, OK for CF Cards.
+  1341 			WaitInit:
+  1342 F641 1E 0F	        MVI     E,REGstatus     ;Get status after initilization
+  1343 F643 CD 1D F5	        CALL    IDErd8D         ;Check Status (info in [D])
+  1344 F646 7A		        MOV     A,D
+  1345 F647 E6 80	        ANI     80H
+  1346 F649 C2 4F F6	        JNZ     WaitInitL       ;Need a longer wait...
+  1347 F64C D1		        POP     D               ;Restore registers
+  1348 F64D C1		        POP     B
+  1349 F64E C9		        RET                     ;Return. Well check for errors when we get back
+  1350 			WaitInitL:
+  1351 F64F 3E 02	        MVI     A,2
+  1352 F651 CD 71 F6	        CALL    DELAYLONG       ;Long delay, drive has to get up to speed
+  1353 F654 05		        DCR     B
+  1354 F655 C2 41 F6	        JNZ     WaitInit
+  1355 F658 AF		        XRA     A
+  1356 F659 3D		        DCR     A
+  1357 F65A D1		        POP     D
+  1358 F65B C1		        POP     B
+  1359 F65C C9		        RET                   
+  1360 			SELECTA:
+  1361 F65D AF		        XRA     A               ; Select drive 0
+  1362 F65E 32 11 DF	        STA     @CURRENTDRIVE
+  1363 F661 D3 34	        OUT     IDEDrive
+  1364 F663 C9		        RET
+  1365 			DELAYSHORT:                     ;DELAY ~32 MS (DOES NOT SEEM TO BE CRITICAL)
+  1366 F664 3E 28	        MVI     A,40
+  1367 F666 06 00	DELAY3: MVI     B,0
+  1368      F6 68	M0:     equ     $
+  1369 F668 05		        dcr     b
+  1370 F669 C2 68 F6	        jnz     M0
+  1371 F66C 3D		        DCR     A
+  1372 F66D C2 66 F6	        JNZ     DELAY3
+  1373 F670 C9		        RET
+  1374 			DELAYLONG:                      ;Long delay (Seconds)
+  1375 F671 32 0F DF	        STA     @DELAYStore
+  1376 F674 C5		        PUSH    B
+  1377 F675 01 FF FF	        LXI     B,0FFFFH        ;<<< May need to adjust delay time to allow cold drive to
+  1378 F678 3A 0F DF	DELAY2: LDA     @DELAYStore     ;    get up to speed.
+  1379 F67B 3D		DELAY1: DCR     A
+  1380 F67C C2 7B F6	        JNZ     DELAY1
+  1381 F67F 0B		        DCX     B
+  1382 F680 79		        MOV     A,C
+  1383 F681 B0		        ORA     B
+  1384 F682 C2 78 F6	        JNZ     DELAY2
+  1385 F685 C1		        POP     B
+  1386 F686 C9		        RET
+  1387 			WaitInitErr:
+  1388 F687 AF		        XRA     A
+  1389 F688 3D		        DCR     A               ;Return NZ (error)
+  1390 F689 D1		        POP     D               ;Restore Registers
+  1391 F68A C1		        POP     B
+  1392 F68B C9		        RET                     ;Return - check for errors there.
+  1393 F68C		msgCPMTRK:      DB      'CPM TRK = $'
+            43 50 4D 20 
+            54 52 4B 20 
+            3D 20 24 
+  1394 F697		msgCPMSEC:      DB      ' CPM SEC = $'
+            20 43 50 4D 
+            20 53 45 43 
+            20 3D 20 24 
+            
+  1395 F6A3		msgLBA:         DB      '  (LBA = 00$'
+            20 20 28 4C 
+            42 41 20 3D 
+            20 30 30 24 
+            
+  1396 F6AF		MSGBracket      DB      ')$'
+            29 24 
+  1397
+  1398      DF 02	@SEC	equ	BOOTBAS
+  1399      DF 04	@SECTORCOUNT equ	@SEC+2
+  1400      DF 05	@DMA	equ	@SECTORCOUNT+1
+  1401      DF 07	@TRK	equ	@DMA+2
+  1402      DF 09	@NOHOLEMODE equ	@TRK+2
+  1403      DF 0B	@DRIVESEC equ @NOHOLEMODE+2
+  1404      DF 0D	@DRIVETRK equ @DRIVESEC+2
+  1405      DF 0F	@DELAYStore equ @DRIVETRK+2
+  1406      DF 11	@CURRENTDRIVE equ @DELAYStore + 2
+  1407      00 0C	CPMBOOTCOUNT    EQU     12              ;Allow up to 12 CPM sectors for CPMLDR
+  1408      01 00	CPMLDRADDRESS equ	0100h
+  1409     			end
+
+
+*******************************************************************************
+                                 Symbols table
+*******************************************************************************
+
+Names			Types	Values
+-----			-----	------
+SPTR			EQU	0E001h
+BOOTBAS			EQU	0DF02h
+SIOPORT			EQU	0DFE1h
+ALTBOOT			EQU	0FF00h
+TARBOOT			EQU	0FC00h
+TKYDSBL			EQU	00000h
+SENSESW			EQU	000FFh
+CONS			EQU	00010h
+COND			EQU	00011h
+TBE			EQU	00002h
+RDA			EQU	00001h
+IDEportA		EQU	00030h
+IDEportB		EQU	00031h
+IDEportC		EQU	00032h
+IDEportCtrl		EQU	00033h
+IDEDrive		EQU	00034h
+READcfg8255		EQU	00092h
+WRITEcfg8255		EQU	00080h
+IDEa0line		EQU	00001h
+IDEa1line		EQU	00002h
+IDEa2line		EQU	00004h
+IDEcs0line		EQU	00008h
+IDEcs1line		EQU	00010h
+IDEwrline		EQU	00020h
+IDErdline		EQU	00040h
+IDErstline		EQU	00080h
+REGdata			EQU	00008h
+REGerr			EQU	00009h
+REGseccnt		EQU	0000Ah
+REGsector		EQU	0000Bh
+REGcylinderLSB		EQU	0000Ch
+REGcylinderMSB		EQU	0000Dh
+REGshd			EQU	0000Eh
+REGcommand		EQU	0000Fh
+REGstatus		EQU	0000Fh
+REGcontrol		EQU	00016h
+REGastatus		EQU	00017h
+COMMANDrecal		EQU	00010h
+COMMANDread		EQU	00020h
+COMMANDwrite		EQU	00030h
+COMMANDinit		EQU	00091h
+COMMANDid		EQU	000ECh
+COMMANDspindown		EQU	000E0h
+COMMANDspinup		EQU	000E1h
+CR			EQU	0000Dh
+LF			EQU	0000Ah
+CTRLC			EQU	00003h
+ESC			EQU	0001Bh
+IMSBoot			EQU	0F40Ah
+phex			EQU	0F5DAh
+SHOWErrors		EQU	0F619h
+M0			EQU	0F668h
+@SEC			EQU	0DF02h
+@SECTORCOUNT		EQU	0DF04h
+@DMA			EQU	0DF05h
+@TRK			EQU	0DF07h
+@NOHOLEMODE		EQU	0DF09h
+@DRIVESEC		EQU	0DF0Bh
+@DRIVETRK		EQU	0DF0Dh
+@DELAYStore		EQU	0DF0Fh
+@CURRENTDRIVE		EQU	0DF11h
+CPMBOOTCOUNT		EQU	0000Ch
+CPMLDRADDRESS		EQU	00100h
+monit			Label	0F003h
+start			Label	0F023h
+cmdTbl			Label	0F048h
+exec			Label	0F06Eh
+doBoot			Label	0F07Bh
+chksum			Label	0F086h
+csloop			Label	0F093h
+tmem			Label	0F0A0h
+cycl			Label	0F0AEh
+tlop			Label	0F0B9h
+skipWr			Label	0F0C3h
+rlop			Label	0F0CEh
+skipRd			Label	0F0DCh
+rndm			Label	0F0EAh
+peve			Label	0F0F2h
+disp			Label	0F0F9h
+dmpLine			Label	0F104h
+dmpHex			Label	0F10Ah
+dmpAsc			Label	0F11Ch
+dspDot			Label	0F127h
+dspAsc			Label	0F129h
+pgm			Label	0F13Bh
+pglp			Label	0F149h
+crig			Label	0F152h
+con1			Label	0F165h
+con2			Label	0F16Fh
+fill			Label	0F173h
+zloop			Label	0F187h
+moveb			Label	0F18Fh
+exchg			Label	0F19Bh
+doMove			Label	0F1A3h
+mloop			Label	0F1ADh
+nexch			Label	0F1B8h
+ndmt			Label	0F1C3h
+ndlop			Label	0F1D0h
+compr			Label	0F1DDh
+vmlop			Label	0F1EDh
+srch1			Label	0F1FEh
+srch2			Label	0F20Bh
+doSrch			Label	0F214h
+cont			Label	0F230h
+obcp			Label	0F242h
+skp			Label	0F248h
+poutp			Label	0F250h
+pinpt			Label	0F26Eh
+hexload			Label	0F289h
+rcvLine			Label	0F29Dh
+wtMark			Label	0F2A2h
+data			Label	0F2C1h
+flush			Label	0F2D8h
+flshLp			Label	0F2DDh
+iByte			Label	0F2EAh
+asc2Bin			Label	0F300h
+getChar			Label	0F308h
+inWait0			Label	0F310h
+inWait1			Label	0F319h
+haveChr			Label	0F324h
+noEcho			Label	0F32Fh
+tahex			Label	0F332h
+ahex			Label	0F335h
+ahe0			Label	0F337h
+ahe1			Label	0F33Ah
+ahexNr			Label	0F33Dh
+alf			Label	0F354h
+spce			Label	0F35Bh
+ptcn			Label	0F35Dh
+ptlop			Label	0F35Eh
+alph			Label	0F36Bh
+crlf			Label	0F378h
+err			Label	0F382h
+pt2			Label	0F38Eh
+ptad			Label	0F396h
+binh			Label	0F3A8h
+binl			Label	0F3ACh
+dspMsg			Label	0F3BAh
+dspLoop			Label	0F3BBh
+rdcn			Label	0F3C8h
+getCon			Label	0F3D1h
+pause			Label	0F3DCh
+ploop			Label	0F3E2h
+cntlc			Label	0F3EBh
+bmp			Label	0F3FFh
+goon			Label	0F406h
+CPMBOOT			Label	0F41Fh
+NextRCPM		Label	0F43Ah
+LOADDONE		Label	0F460h
+READSECTOR		Label	0F463h
+MoreRD16		Label	0F47Eh
+wrlba			Label	0F4A2h
+wrlbaHoles		Label	0F4B2h
+IDEwaitnotbusy		Label	0F4DEh
+MoreWait		Label	0F4E5h
+DoneNotBusy		Label	0F502h
+IDEwr8D			Label	0F504h
+IDErd8D			Label	0F51Dh
+wrlbaNoHoles		Label	0F52Eh
+IDEwaitdrq		Label	0F571h
+MoreDRQ			Label	0F578h
+DoneDRQ			Label	0F595h
+DISPLAYposition		Label	0F597h
+PHEX			Label	0F5DAh
+ZCONV			Label	0F5EBh
+PSTRING			Label	0F5F7h
+PSTRX			Label	0F5FBh
+DONEP			Label	0F608h
+ZCRLF			Label	0F60Ch
+SHOWerrors		Label	0F619h
+IDEinit			Label	0F61Ch
+ResetDelay		Label	0F628h
+WaitInit		Label	0F641h
+WaitInitL		Label	0F64Fh
+SELECTA			Label	0F65Dh
+DELAYSHORT		Label	0F664h
+DELAY3			Label	0F666h
+DELAYLONG		Label	0F671h
+DELAY2			Label	0F678h
+DELAY1			Label	0F67Bh
+WaitInitErr		Label	0F687h
+msgCPMTRK		Label	0F68Ch
+msgCPMSEC		Label	0F697h
+msgLBA			Label	0F6A3h
+MSGBracket		Label	0F6AFh
+
+Statistics
+----------
+"Name"	= 0
+"EQU"	= 63
+"SET"	= 0
+Labels	= 122
+
+
