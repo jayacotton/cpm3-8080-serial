@@ -57,11 +57,20 @@ BAUD$19200	EQU 15		; 19.2K BAUD
 
 CRTSTAT	EQU	010H		;STATUS PORT TO CHECK CRT OUTPUT STATUS
 KEYSTAT	EQU	010H
+SIOAS	EQU	10h
+SIOAD	EQU	11h
 KEYIN	EQU	011H
 KEYOUT	EQU	011H
+SIOBS	equ	12h
+SIOBD	equ	13h
 CR	EQU	0DH
 LF	EQU	0AH
 
+p$zpio2	equ	20h	; place holder
+p$cent$stat     equ p$zpio2+0
+p$cent$data     equ p$zpio2+1
+p$zpio2a        equ p$zpio2+2
+p$zpio2b        equ p$zpio2+3
 
 	; WILL START OFF IN COMMON MEMORY FOR BANKED OR NON-BANKED SYSTEMS:
 	CSEG
@@ -82,8 +91,11 @@ LF	EQU	0AH
 ?CINIT:	; DEVICE 0 INITIALIZATION 
 	MVI	A,3
 	OUT	(KEYSTAT)
+	out	(SIOBS)
 	MVI	A,11h
 	OUT	(KEYSTAT)
+	out	(SIOBS)
+	call	cent$init
 	RET
 ;
 ;       ;Print a string in [DE] up to '$'
@@ -109,48 +121,93 @@ KEYIN$MSG	DB	CR,LF,'In Keyin ','$'
 
 ;
 ; 
-;<<<<<<<<<<<<<<<<<<< MAIN CONSOL STATUS ROUTINE >>>>>>>>>>>>>>>>>>>>>>
 CIST0:				; DEVICE 0 INPUT STATUS:
 CSTS:
-	IN	KEYSTAT
-	ANI	01H
-	RZ			;RETURN WITH 0 IN [A] IF NOTHING THERE
-	MVI	A,0FFH
-	RET			;RETURN WITH 0FFH IN [A] IF SOMETHING
-;
-;
-;<<<<<<<<<<<<<<<<<<<< MAIN CONSOL INPUT ROUTINE >>>>>>>>>>>>>>>>>>>>
+	mov	a,b	; get dev nr.
+	cpi	3
+	jnc	null$status
+	mov	l,b	; create data ports
+	mvi	h,0	; index
+	lxi	d,data$ports
+	dad	d
+	mov	a,m	; get port nr
+	mov	c,m
+	dcr	a
+	sta	cs$in
+	db	0dbh	; read the port
+cs$in	db	0
+	ani	1	; is there data ?
+	rz		;  No.... 
+	ori	0ffh	; or yes
+	ret
 ;
 CI0:				;DEVICE 0 INPUT:
 CI:
-	IN	KEYSTAT
-	rrc
-	jnc	CI
-	IN	KEYIN
-	ANI	7FH
-	RET
+	mov	a,b
+	cpi	3
+	jnc	null$input
+ci1:	call	CSTS
+	jz	ci1
+	mov	a,c
+	sta	ci$in
+	db	0dbh
+ci$in:	db	0
+	ani	7fh
+	ret
 ;
-;<<<<<<<<<<<<<<<<<<<<<< MAIN CONSOL OUTPUT ROUTINE >>>>>>>>>>>>>>>>>>>>>>>>>
+null$input:
+	mvi	a,1ah
+	ret
 ;
 COST0:	; DEVICE 0 OUTPUT STATUS:
-	IN	CRTSTAT
-	ANI	2H
-	RZ
-	XRA	A
-	DCR	A
-	RET
+	mov	a,b		; copy port nr
+	cpi	3
+	jz	cent$stat
+	jnc	null$status
+	mov	l,b
+	mvi	h,0
+	lxi	d,data$ports
+	dad	d
+	mov	a,m
+	dcr	a
+	sta	st$out
+	db	0dbh
+st$out	db	0
+	ani	2
+	rz
+	ori	0ffh
+	ret
+;
+; this code can output to multiple devices
 ;
 CO0:				; DEVICE 0 OUTPUT:
-CO:
-	IN	CRTSTAT
-	ANI	02H
-	JZ	CO
-	MOV	A,C
-	OUT	KEYOUT
-	RET
-;
-;
-;
+CO:	; character output....
+	mov	a,b	; get device nr
+	cpi	3	; centronics printer
+	jz	centronics$out
+	jnc	null$output
+	mov	a,c	; save the output character
+	push	psw
+	push	b	; save device number
+co$spin:		
+	call	COST0	; poll status
+	jz	co$spin	; not ready yet.
+	pop	h	; get back device nr in hl
+	mov	l,h
+	mvi	h,0
+	lxi	d,data$ports
+	dad	d	; add index of table
+	mov	a,m	; get port address.
+	sta	co$out
+	pop	psw
+	db	0d3h
+co$out	db	0
+null$output:
+	ret
+
+null$status:
+	xra	a
+	ret
 ;
 	;;;;; NULL ROUTINES:
 NULL$CIST:
@@ -163,7 +220,15 @@ NULL$INIT:
 NULL$CO:
 NULL$RET:
 	RET			;HARMLESS RETURN
-
+cent$init: 
+;; need code here
+	ret	
+cent$stat:
+;; need code here
+	ret
+centronics$out:
+;; need code here
+	ret
 
 	; STORAGE FOR DEVICE CODE -- CAN RESIDE IN SAME SEGMENT AS THE BULK
 	;  OF CHARACTER I/O ROUTINES:
@@ -176,11 +241,19 @@ DEV$CODE:	DS	1
 	DB	'CRT   '		;CONSOLE (DEVICE 0)
 	DB	MB$IN$OUT
 	DB	BAUD$NONE
-
+	db	'CRT1  '
+	db	MB$IN$OUT,BAUD$NONE
+; add more crt's here 
+	db	'CEN   '
+	db	MB$OUTPUT,BAUD$NONE
 MAX$DEVICES	EQU	($-@CTBL)/8	;# DEVICES IN TABLE
 	DB	0			;TABLE TERMINATOR
 
-
+;
+; to add more sio ports you need to extend this
+; table. 
+data$ports:
+	db	SIOAD,SIOBD	
 	; OTHER DATA AREAS:
 	DS	24		;CHARACTER I/O LOCAL STACK
 IOSP	EQU	$
