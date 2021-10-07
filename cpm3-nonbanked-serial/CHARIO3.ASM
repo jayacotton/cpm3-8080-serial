@@ -143,14 +143,14 @@ cs$in	db	0
 ;
 CI0:				;DEVICE 0 INPUT:
 CI:
-	mov	a,b
+	mov	a,b	; copy dev nr
 	cpi	3
-	jnc	null$input
-ci1:	call	CSTS
+	jnc	null$input ; don't over run the table	
+ci1:	call	CSTS	; get serial status 
 	jz	ci1
-	mov	a,c
+	mov	a,c	; c has the port nr
 	sta	ci$in
-	db	0dbh
+	db	0dbh	; read a byte
 ci$in:	db	0
 	ani	7fh
 	ret
@@ -161,19 +161,21 @@ null$input:
 ;
 COST0:	; DEVICE 0 OUTPUT STATUS:
 	mov	a,b		; copy port nr
-	cpi	3
-	jz	cent$stat
+	cpi	3		; don't overrun the table
+	jz	cent$stat	; well is it printer
 	jnc	null$status
-	mov	l,b
+	mov	l,b		; form an index
 	mvi	h,0
-	lxi	d,data$ports
+	lxi	d,data$ports	; add to table
 	dad	d
-	mov	a,m
-	dcr	a
+	mov	a,m		; get port value
+	dcr	a		; data is odd, stat is even
+; ack! self modifying code, BTW will not work in a rom
 	sta	st$out
-	db	0dbh
+	db	0dbh		 
 st$out	db	0
-	ani	2
+; we read the sio status register
+	ani	2		; is buffer empty
 	rz
 	ori	0ffh
 	ret
