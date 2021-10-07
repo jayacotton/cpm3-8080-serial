@@ -11,3 +11,5 @@ The software presented here is a combined effort from John Monahan, Jay Jeager, 
 There is a vast amount of documentation on the implementation and configuration of the software. Take your time and understand it before diving in.
 
 Once you get CPM3 up on your machine, you will find a lot of code that just does not belong there. I am planning to clean this out and add code that is appropriate to the 8080. Some of the .com files seem to be related to running under simh code.
+
+Altmon was added to the project, its been modified to boot cpm3 directly. To run altmon goto start+3.
