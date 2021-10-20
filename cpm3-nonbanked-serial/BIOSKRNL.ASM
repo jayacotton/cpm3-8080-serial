@@ -502,7 +502,7 @@ seldsk:
 	cma
 	out	255
 ; for a short time, don't change the drive
-	mvi	c,0
+;	mvi	c,0
 ;
 	mov a,c  
 	sta @adrv			; save drive select code

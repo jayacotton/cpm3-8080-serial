@@ -170,7 +170,7 @@ COST0:	; DEVICE 0 OUTPUT STATUS:
 	dad	d
 	mov	a,m		; get port value
 	dcr	a		; data is odd, stat is even
-; ack! self modifying code, BTW will not work in a rom
+; ack self modifying code, BTW will not work in a rom
 	sta	st$out
 	db	0dbh		 
 st$out	db	0
