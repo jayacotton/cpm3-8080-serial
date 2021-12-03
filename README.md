@@ -13,3 +13,4 @@ There is a vast amount of documentation on the implementation and configuration 
 Once you get CPM3 up on your machine, you will find a lot of code that just does not belong there. I am planning to clean this out and add code that is appropriate to the 8080. Some of the .com files seem to be related to running under simh code.
 
 Altmon was added to the project, its been modified to boot cpm3 directly. To run altmon goto start+3.
+To boot CPM goto start.    i.e.  enter the address on the address switches, examine and press run.  
