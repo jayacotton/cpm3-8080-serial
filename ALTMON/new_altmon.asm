@@ -37,6 +37,9 @@
 ;		boot PROM at FC00. Previously "R" was a duplicate of
 ;		the "N" (non-destructive memory test) command.
 ;
+;    1.3  12/7/2021  Jay Cotton
+;		Add an IDE boot loader to the code and make it default
+;		Modify the B command to run IMSBoot
 ;-------------------------------------------------------------------------
 ;
 ;   Following is a summary of changes from the original VG 2.0c monitor:
@@ -209,7 +212,7 @@ monit	mvi	a,3		;reset 6850 uart
 
 	lxi	sp,SPTR
 	call	dspMsg		;display welcome banner
-	db	CR,LF,LF,'ALTMON 1.','2'+80h
+	db	CR,LF,LF,'ALTMON 1.','3'+80h
 
 ; start - command processing loop
 
@@ -242,7 +245,7 @@ start	lxi	sp,SPTR		;re-init stack pointer
 
 ; Command Table
 
-cmdTbl	dw	ALTBOOT		;B jump to Altair disk boot loader
+cmdTbl	dw	IMSBoot		;B jump to IMSAI disk boot loader
 	dw	compr		;C SSSS FFFF CCCC compare blocks
 	dw	disp		;D SSSS FFFF dump in hex
 	dw	exchg		;E SSSS FFFF DDDD exchange block
@@ -258,7 +261,7 @@ cmdTbl	dw	ALTBOOT		;B jump to Altair disk boot loader
 	dw	poutp		;O PP DD output to port
 	dw	pgm		;P LLLL program memory
 	dw	chksum		;Q SSSS FFFF compute checksum
-	dw	TARBOOT		;R jump to Tarbell boot PROM
+	dw	IMSBoot		;R jump to IMSAI disk boot loader 
 	dw	srch1		;S SSSS FFFF DD search for single byte
 	dw	tmem		;T SSSS FFFF test memory
 
@@ -999,34 +1002,34 @@ IMSBoot	equ	$
 	call	IDEinit
 CPMBOOT:                        ;Boot CPM from IDE system tracks -- if present
         XRA     A               ;Load from track 0,sec 1, head 0 (Always)
-	sta	@NOHOLEMODE
-        STA     @TRK+1
-        STA     @TRK
-        LDA     @NOHOLEMODE     ;Conveniently, this is 0 for hole mode, 1 for no hole mode
-        STA     @SEC
+	sta	NOHOLEMODE
+        STA     TRK+1
+        STA     TRK
+        LDA     NOHOLEMODE     ;Conveniently, this is 0 for hole mode, 1 for no hole mode
+        STA     SEC
 
         MVI     A,CPMBOOTCOUNT ;Count of CPMLDR sectors  (12)
-        STA     @SECTORCOUNT
+        STA     SECTORCOUNT
         LXI     H,CPMLDRADDRESS ;DMA address where the CPMLDR resides in RAM (100H)
-        SHLD    @DMA
+        SHLD    DMA
 
 NextRCPM:
         CALL    wrlba           ;Update LBA on drive
         CALL    DISPLAYposition ;Display current Track,sector,head#
         CALL    ZCRLF
 
-        LHLD    @DMA
+        LHLD    DMA
         CALL    READSECTOR      ;read a sector
-        SHLD    @DMA
+        SHLD    DMA
 
-        LDA     @SECTORCOUNT
+        LDA     SECTORCOUNT
         DCR     A
-        STA     @SECTORCOUNT
+        STA     SECTORCOUNT
         JZ      LOADDONE
 
-        LHLD    @SEC
+        LHLD    SEC
         INX     H
-        SHLD    @SEC            ;Note we assume we alway will stay on tarck 0 in this special case
+        SHLD    SEC            ;Note we assume we alway will stay on tarck 0 in this special case
         JMP     NextRCPM
 LOADDONE:
 	jmp	CPMLDRADDRESS		; see ya'
@@ -1041,7 +1044,7 @@ READSECTOR:
         CALL    IDEwr8D         ;Send sec read command to drive.
         CALL    IDEwaitdrq      ;wait until it's got the data
         JC      SHOWerrors
-        LHLD    @DMA            ;DMA address
+        LHLD    DMA            ;DMA address
         MVI     B,0             ;Read 512 bytes to [HL] (256X2 bytes)
 MoreRD16:
         MVI     A,REGdata       ;REG regsiter address
@@ -1068,7 +1071,7 @@ wrlba:
 
         CALL    IDEwaitnotbusy  ;Make sure drive isn't busy...
         JC      SHOWErrors      ;If error, display status
-        LDA     @NOHOLEMODE     ;Are we leaving original holes, or not?
+        LDA     NOHOLEMODE     ;Are we leaving original holes, or not?
         ORA     A
         JZ      wrlbaHoles      ;Leaving original holes
         JMP     wrlbaNoHoles    ;No holes
@@ -1077,22 +1080,22 @@ wrlba:
 wrlbaHoles:                     ;Write the logical block address to the drive's registers
                                 ;Note we do not need to set the upper nibble of the LBA
                                 ;It will always be 0 for these small drives
-        LDA     @SEC            ;LBA mode Low sectors go directly
+        LDA     SEC            ;LBA mode Low sectors go directly
         INR     A               ;Sectors are numbered 1 -- MAXSEC (even in LBA mode)
-        STA     @DRIVESEC       ;For Diagnostic Display Only
+        STA     DRIVESEC       ;For Diagnostic Display Only
         MOV     D,A
         MVI     E,REGsector     ;Send info to drive
         CALL    IDEwr8D         ;Note: For drive we will have 0 - MAXSEC sectors only
 
-        LHLD    @TRK
+        LHLD    TRK
         MOV     A,L
-        STA     @DRIVETRK
+        STA     DRIVETRK
         MOV     D,L             ;Send Low TRK#
         MVI     E,REGcylinderLSB
         CALL    IDEwr8D
 
         MOV     A,H
-        STA     @DRIVETRK+1
+        STA     DRIVETRK+1
         MOV     D,H             ;Send High TRK#
         MVI     E,REGcylinderMSB
         CALL    IDEwr8D
@@ -1104,7 +1107,7 @@ wrlbaHoles:                     ;Write the logical block address to the drive's 
 IDEwaitnotbusy:                 ;ie Drive READY if 01000000
         MVI     B,0FFH
         MVI     A,0FFH          ;Delay, must be above 80H for 4MHz Z80. Leave longer for slower drives
-        STA     @DELAYStore
+        STA     DELAYStore
 
 MoreWait:
         MVI     E,REGstatus     ;wait for RDY bit to be set
@@ -1115,9 +1118,9 @@ MoreWait:
         JZ      DoneNotBusy
         DCR     B
         JNZ     MoreWait
-        LDA     @DELAYStore     ;Check timeout delay
+        LDA     DELAYStore     ;Check timeout delay
         DCR     A
-        STA     @DELAYStore
+        STA     DELAYStore
         JNZ     MoreWait
         STC                     ;Set carry to indicate an error
         ret
@@ -1165,16 +1168,16 @@ IDErd8D:                                ;READ 8 bits from IDE register in [E], r
 wrlbaNoHoles:
                                 ;Write the logical block address to the drive's registers
                                 ;Starting with LBA 0 and without leaving an "holes"
-        LHLD    @TRK            ;Get the "CPM" requested track High & Low
+        LHLD    TRK            ;Get the "CPM" requested track High & Low
         MOV     A,L             ;Get Low byte of track
         RRC                     ;Get bottom two bits in high bits of A
         RRC
         ANI     0C0H            ;Just what were the bottom two bits (now at the top)
         MOV     C,A             ;Save in C
-        LDA     @SEC            ;Sector number in A
+        LDA     SEC            ;Sector number in A
         ANI     03FH            ;Take only bottom 6 bits, just in case
         ORA     C               ;Add in top 2 bits of track
-        STA     @DRIVESEC       ;For diagnostic display only
+        STA     DRIVESEC       ;For diagnostic display only
         MOV     D,A             ;Send info to the drive
         MVI     E,REGsector
         CALL    IDEwr8D
@@ -1189,7 +1192,7 @@ wrlbaNoHoles:
         RRC                     ;In upper bits of A
         ANI     0C0H            ;Mask all but the two bits we want
         ORA     C               ;Add in the top 6 bits of the first track byte
-        STA     @DRIVETRK
+        STA     DRIVETRK
         MOV     D,A             ;Send Low TRK#
         MVI     E,REGcylinderLSB
         CALL    IDEwr8D
@@ -1198,7 +1201,7 @@ wrlbaNoHoles:
         RRC                     ;Just the top 6 bits
         RRC
         ANI     03FH
-        STA     @DRIVETRK+1
+        STA     DRIVETRK+1
         MOV     D,A             ;Send High TRK#
         MVI     E,REGcylinderMSB
         CALL    IDEwr8D
@@ -1210,7 +1213,7 @@ wrlbaNoHoles:
 IDEwaitdrq:
         MVI     B,0FFH
         MVI     A,0FFH          ;Delay, must be above 80H for 4MHz Z80. Leave longer for slower drives
-        STA     @DELAYStore
+        STA     DELAYStore
 
 MoreDRQ:
         MVI     E,REGstatus     ;wait for DRQ bit to be set
@@ -1221,9 +1224,9 @@ MoreDRQ:
         JZ      DoneDRQ
         DCR     B
         JNZ     MoreDRQ
-        LDA     @DELAYStore     ;Check timeout delay
+        LDA     DELAYStore     ;Check timeout delay
         DCR     A
-        STA     @DELAYStore
+        STA     DELAYStore
         JNZ     MoreDRQ
         STC                     ;Set carry to indicate error
         RET
@@ -1233,25 +1236,25 @@ DoneDRQ:
 DISPLAYposition:                ;Display current track,sector & head position
         LXI     D,msgCPMTRK     ;Display in LBA format
         CALL    PSTRING         ;---- CPM FORMAT ----
-        LDA     @TRK+1          ;High TRK byte
+        LDA     TRK+1          ;High TRK byte
         CALL    phex
-        LDA     @TRK            ;Low TRK byte
+        LDA     TRK            ;Low TRK byte
         CALL    phex
 
         LXI     D,msgCPMSEC
         CALL    PSTRING         ;SEC = (16 bits)
-        LDA     @SEC+1          ;High Sec
+        LDA     SEC+1          ;High Sec
         CALL    phex
-        LDA     @SEC            ;Low sec
+        LDA     SEC            ;Low sec
         CALL    phex
                                 ;---- LBA FORMAT ----
         LXI     D, msgLBA
         CALL    PSTRING         ;(LBA = 00 (<-- Old "Heads" = 0 for these drives).
-        LDA     @DRIVETRK+1     ;High "cylinder" byte
+        LDA     DRIVETRK+1     ;High "cylinder" byte
         CALL    phex
-        LDA     @DRIVETRK       ;Low "cylinder" byte
+        LDA     DRIVETRK       ;Low "cylinder" byte
         CALL    phex
-        LDA     @DRIVESEC
+        LDA     DRIVESEC
         CALL    phex
         LXI     D, MSGBracket   ;)
         CALL    PSTRING
@@ -1359,7 +1362,7 @@ WaitInitL:
         RET                   
 SELECTA:
         XRA     A               ; Select drive 0
-        STA     @CURRENTDRIVE
+        STA     CURRENTDRIVE
         OUT     IDEDrive
         RET
 DELAYSHORT:                     ;DELAY ~32 MS (DOES NOT SEEM TO BE CRITICAL)
@@ -1372,10 +1375,10 @@ M0:     equ     $
         JNZ     DELAY3
         RET
 DELAYLONG:                      ;Long delay (Seconds)
-        STA     @DELAYStore
+        STA     DELAYStore
         PUSH    B
         LXI     B,0FFFFH        ;<<< May need to adjust delay time to allow cold drive to
-DELAY2: LDA     @DELAYStore     ;    get up to speed.
+DELAY2: LDA     DELAYStore     ;    get up to speed.
 DELAY1: DCR     A
         JNZ     DELAY1
         DCX     B
@@ -1393,18 +1396,18 @@ WaitInitErr:
 msgCPMTRK:      DB      'CPM TRK = $'
 msgCPMSEC:      DB      ' CPM SEC = $'
 msgLBA:         DB      '  (LBA = 00$'
-MSGBracket      DB      ')$'
+MSGBracket:      DB      ')$'
 
-@SEC	equ	BOOTBAS
-@SECTORCOUNT equ	@SEC+2
-@DMA	equ	@SECTORCOUNT+1
-@TRK	equ	@DMA+2
-@NOHOLEMODE equ	@TRK+2
-@DRIVESEC equ @NOHOLEMODE+2
-@DRIVETRK equ @DRIVESEC+2
-@DELAYStore equ @DRIVETRK+2
-@CURRENTDRIVE equ @DELAYStore + 2
-CPMBOOTCOUNT    EQU     12              ;Allow up to 12 CPM sectors for CPMLDR
-CPMLDRADDRESS equ	0100h
+SEC:	equ	BOOTBAS
+SECTORCOUNT: equ	SEC+2
+DMA:	equ	SECTORCOUNT+1
+TRK:	equ	DMA+2
+NOHOLEMODE: equ	TRK+2
+DRIVESEC: equ NOHOLEMODE+2
+DRIVETRK: equ DRIVESEC+2
+DELAYStore: equ DRIVETRK+2
+CURRENTDRIVE: equ DELAYStore + 2
+CPMBOOTCOUNT:    EQU     12              ;Allow up to 12 CPM sectors for CPMLDR
+CPMLDRADDRESS: equ	0100h
 	end
 
