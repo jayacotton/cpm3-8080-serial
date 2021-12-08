@@ -13,7 +13,7 @@ To generate a CP/M disk you need to say:  (in simh)
 
 ```
   i:
-  submit hbuildcpm
+  submit hmakecpm
 ```
   
 Pro TIP:  the exit from simh type a ^E (control E), that gets you back to simh and then say exit.
