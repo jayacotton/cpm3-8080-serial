@@ -1,3 +1,6 @@
 r ..\ALTMON\new_altmon.asm
 a:asm new_altm
 w ..\ALTMON\new_altm.hex
+r ..\ALTMON\boot.asm
+a:asm boot
+w ..\ALTMON\boot.hex
