@@ -18,3 +18,5 @@ Once you get CPM3 up on your machine, you will find a lot of code that just does
 
 Altmon was added to the project, its been modified to boot cpm3 directly. To run altmon goto start+3.
 To boot CPM goto start.    i.e.  enter the address on the address switches, examine and press run.  
+
+XMODEM.COM was added to provide a way to load code onto the CPM3/8080 machine.  The best command to use is xmodem <filename> /r /x0 /q
