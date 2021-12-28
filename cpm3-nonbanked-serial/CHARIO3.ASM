@@ -152,7 +152,7 @@ ci1:	call	CSTS	; get serial status
 	sta	ci$in
 	db	0dbh	; read a byte
 ci$in:	db	0
-	ani	7fh
+;	ani	7fh      ; possible bug here.....
 	ret
 ;
 null$input:
