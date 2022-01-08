@@ -92,8 +92,9 @@ p$zpio2b        equ p$zpio2+3
 	MVI	A,3
 	OUT	(KEYSTAT)
 	out	(SIOBS)
-	MVI	A,11h
+	MVI	A,11h		; 8 data bits 2 stop bits
 	OUT	(KEYSTAT)
+	mvi	a,1		; 7 data bits even parity 2 stop bits
 	out	(SIOBS)
 	call	cent$init
 	RET
