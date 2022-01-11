@@ -9,7 +9,7 @@ on the back panel.  This is the proposed wireing, its cast in jello
 just now.
 
 pio board  		DB25
-CA1   	2	-	1  strobe
+CA1   	2	-	1  STROBE
 PA0   	3	-	2  DATA 0
 PA1	4	-	3  DATA 1
 PA2	24	- 	4  DATA 2
@@ -22,7 +22,7 @@ CA2	12	- 	10 ACK
 PB0	18	-	11 BUSY
 PB1	17	-	12 Paper Empty
 PB2	16	-	13 SEL
-PB3	15	-	14 AUTO F
+PB3	15	-	14 AUTO FEED
 PB4	14	-	15 ERROR
 PB5	13	- 	16 INIT
 PB6	9	-	17 SELIN
