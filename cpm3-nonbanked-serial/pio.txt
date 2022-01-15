@@ -9,7 +9,7 @@ on the back panel.  This is the proposed wireing, its cast in jello
 just now.
 
 pio board  		DB25
-CA2   	2	>	1  STROBE 
+PB7   	10	>	1  STROBE 
 PA0   	3	>	2  DATA 0
 PA1	4	>	3  DATA 1
 PA2	24	> 	4  DATA 2
